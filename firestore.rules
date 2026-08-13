@@ -1,0 +1,39 @@
+rules_version = '2';
+
+/* Paste this into: Firebase console -> Firestore Database -> Rules -> Publish.
+   Replace PASTE_YOUR_UID_HERE with your user ID (the site shows it to you the
+   first time you sign in with the email/password account you created in the
+   console).
+
+   This is the real lock. The page hides its edit controls from visitors, but a
+   hidden button stops nobody — anyone can open devtools. These rules run on
+   Google's servers and reject the write itself, which is what makes the
+   tracker safe to leave open on the public internet. */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /tracker/{document} {
+      // Anyone may read: this is what makes visitors see your live progress.
+      allow read: if true;
+
+      // Only you may write.
+      allow write: if request.auth != null
+                   && request.auth.uid == 'PASTE_YOUR_UID_HERE';
+    }
+
+    // One document per app, holding that app's screenshots. Same rule as the
+    // tracker: readable by everyone (so the pictures show on every device and
+    // to every visitor), writable only by you.
+    match /shots/{appNumber} {
+      allow read: if true;
+      allow write: if request.auth != null
+                   && request.auth.uid == 'PASTE_YOUR_UID_HERE';
+    }
+
+    // Nothing else in the database is reachable at all.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
