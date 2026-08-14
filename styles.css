@@ -1,0 +1,2079 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   Intentional YouTube — interactive case study
+   No build step, no dependencies.
+
+   PERF RULE for this file: only `transform` and `opacity` are ever
+   animated. Those are composited on the GPU. Animating box-shadow,
+   background, width, or text-shadow forces a repaint every frame on the
+   main thread — that is what made the original feel laggy.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Tokens ─────────────────────────────────────────────────────────── */
+:root {
+  /* Site (dark) */
+  --bg:        #0c0c11;
+  --card:      #16161d;
+  --primary:   #f4622c;
+  --accent:    #7c6fcd;
+  --fg:        #eeedf5;
+  --muted:     #9a9ab2;   /* 6.1:1 on --bg — was #8787a0 */
+  --soft:      #cac9dc;   /* ~10.5:1 on --bg — long-form reading text, e.g. About Me */
+  /* The challenge squares. Swap this one value to match the Figma red. */
+  --sq-red:    #d93a30;
+  --line:      rgba(255,255,255,.08);
+  --line-md:   rgba(255,255,255,.14);
+
+  /* Mockup (the real extension's light palette) */
+  --m-bg:      #efeae2;
+  --m-card:    #fdfcfa;
+  --m-ink:     #1b1b1b;
+  --m-muted:   #6f695e;
+  --m-green:   #2f6146;
+  --m-soft:    #cfe3cb;
+  --m-soft-ink:#3d5c46;
+  --m-line:    #e4ded4;
+  --m-pink:    #f9d9dd;
+  --m-pink-ink:#a83b50;
+
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+/* ── Reset ──────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  overflow-x: hidden;
+}
+img { max-width: 100%; display: block; }
+button { font: inherit; color: inherit; background: none; border: 0; }
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ── Progress bar + dots ────────────────────────────────────────────── */
+.progress {
+  position: fixed; inset: 0 0 auto 0; height: 2px;
+  background: rgba(255,255,255,.07); z-index: 90;
+}
+.progress__fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--primary));
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform .5s cubic-bezier(.22,1,.36,1);
+}
+
+/* ── Top bar ────────────────────────────────────────────────────────── */
+/* Height of the fixed bar, used by every full-screen layer that has to start
+   below it. Kept as a variable so the two never drift apart. */
+:root { --topbar-h: 62px; }
+
+.topbar {
+  position: fixed; top: 0; left: 0; right: 0;
+  /* Above the outro (200) and the About page (300), both of which are
+     full-screen fixed layers that used to cover the navigation entirely.
+     The bar has to stay reachable from every view. */
+  z-index: 500;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 22px 12px;
+  /* Solid, not a gradient: content scrolls under this on the game screen
+     and a fade let the text show through the bar. */
+  background: rgba(12,12,17,.94);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  justify-self: start;
+  margin: 0; padding: 6px 0;
+  font-size: 13px; font-weight: 500;
+  letter-spacing: .2px; white-space: nowrap;
+  cursor: pointer;
+  transition: color .2s;
+}
+.brand span { color: var(--muted); font-weight: 400; }
+.brand:hover span { color: var(--soft); }
+
+.topnav {
+  justify-self: end;
+  display: flex; align-items: center; gap: 10px;
+}
+/* The navigation links carry the accent; the sign-in control deliberately does
+   not. It is an owner's tool, not part of what a visitor came to do, so it
+   recedes to grey while the real navigation leads. */
+.navlink {
+  padding: 8px 18px; border-radius: 100px;
+  border: 1px solid var(--primary);
+  font-size: 12.5px; color: var(--primary);
+  cursor: pointer; white-space: nowrap;
+  transition: color .2s, border-color .2s, background .2s;
+}
+.navlink:hover { background: var(--primary); color: #fff; }
+
+/* Which chrome each view shows */
+body[data-view="home"]  .tracker         { display: none; }
+body[data-view="home"]  .back            { display: none; }
+body[data-view="study"] .navlink--study  { display: none; }
+/* The step tracker belongs to the walkthrough, so it goes away while the
+   About page is up even if the walkthrough is what is underneath. */
+body.about-open .tracker { display: none; }
+body.about-open .back    { display: none; }
+
+@media (max-width: 720px) {
+  /* The tracker wraps onto its own row on narrow screens, so the bar is taller. */
+  :root { --topbar-h: 96px; }
+}
+
+/* ── Progress tracker ───────────────────────────────────────────────── */
+.tracker { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.tracker__steps {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; align-items: center; gap: 9px;
+}
+.tracker__steps li { display: flex; }
+
+.tracker__steps button {
+  position: relative;
+  width: 22px; height: 22px; padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,.22);
+  font-size: 10px; font-weight: 600; line-height: 1;
+  color: transparent;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .3s, border-color .3s, background .3s, color .3s;
+}
+/* Bigger pointer/touch target than the visible circle */
+.tracker__steps button::after { content: ""; position: absolute; inset: -11px -4px; }
+
+.tracker__steps button[data-state="done"] {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.tracker__steps button[data-state="current"] {
+  background: var(--primary); border-color: var(--primary); color: #fff;
+  transform: scale(1.28);
+}
+.tracker__steps button[data-state="todo"] { background: transparent; }
+.tracker__steps button[disabled] { cursor: default; }
+
+.tracker__count {
+  margin: 0; font-size: 10.5px; letter-spacing: 1.4px;
+  text-transform: uppercase; color: var(--muted);
+  white-space: nowrap;
+}
+.tracker__count b { color: var(--fg); font-weight: 500; }
+
+/* ── Mobile menu ────────────────────────────────────────────────────────
+   The hamburger only exists below 720px; above it the nav sits inline and the
+   button is not rendered at all. Bars are drawn with a box-shadow trick so the
+   markup stays a single element and there is nothing to keep in sync. */
+.navtoggle {
+  display: none;
+  justify-self: end;
+  width: 44px; height: 44px;
+  align-items: center; justify-content: center;
+  background: transparent;
+  border: 1px solid var(--primary);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .2s;
+}
+.navtoggle:hover { background: rgba(244,98,44,.12); }
+.navtoggle:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+
+.navtoggle__bars,
+.navtoggle__bars::before,
+.navtoggle__bars::after {
+  display: block;
+  width: 20px; height: 2px;
+  background: var(--primary);
+  border-radius: 2px;
+  transition: transform .22s ease, opacity .18s ease;
+}
+.navtoggle__bars { position: relative; }
+.navtoggle__bars::before,
+.navtoggle__bars::after { content: ""; position: absolute; left: 0; }
+.navtoggle__bars::before { top: -6px; }
+.navtoggle__bars::after  { top:  6px; }
+
+/* Open state: the bars fold into a cross, so the same control closes it. */
+.navtoggle[aria-expanded="true"] .navtoggle__bars { background: transparent; }
+.navtoggle[aria-expanded="true"] .navtoggle__bars::before { transform: translateY(6px) rotate(45deg); }
+.navtoggle[aria-expanded="true"] .navtoggle__bars::after  { transform: translateY(-6px) rotate(-45deg); }
+
+@media (max-width: 720px) {
+  .topbar { grid-template-columns: 1fr auto; padding: 12px 16px 10px; }
+  .tracker { grid-row: 2; grid-column: 1 / -1; margin-top: 8px; }
+  .brand { font-size: 12px; }
+  .tracker__steps { gap: 7px; }
+  .tracker__steps button { width: 19px; height: 19px; }
+
+  .navtoggle { display: flex; }
+
+  /* The links become a panel dropping from the bar. Same button styling as the
+     desktop nav — this is a change of arrangement, not of look. */
+  .topnav {
+    position: absolute;
+    top: 100%; right: 12px; left: 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 14px;
+    background: rgba(20,20,27,.98);
+    border: 1px solid var(--line-md);
+    border-radius: 14px;
+    box-shadow: 0 14px 34px rgba(0,0,0,.5);
+  }
+  .topnav:not(.is-open) { display: none; }
+
+  /* min-height keeps every row a comfortable touch target; padding alone left
+     them at 42px, just under the 44px floor. */
+  .topnav .navlink {
+    width: 100%; text-align: center;
+    padding: 12px 18px; min-height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  /* The sign-in dropdown would otherwise try to hang off the side of a panel
+     that is already the width of the screen. */
+  .authwrap { width: 100%; }
+  .topnav .navlink--auth { width: 100%; justify-content: center; }
+  .authpanel { position: static; width: auto; margin-top: 8px; box-shadow: none; }
+}
+
+/* ── Screens & layout ───────────────────────────────────────────────── */
+.screen {
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 116px 24px 76px;   /* clears the fixed top bar */
+}
+.screen[hidden] { display: none; }
+.screen.is-live { animation: screen-in .4s cubic-bezier(.25,.46,.45,.94) both; }
+
+@keyframes screen-in {
+  from { opacity: 0; transform: translate3d(0, 30px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+.layout {
+  width: 100%; max-width: 620px;
+  display: flex; flex-direction: column;
+  gap: 36px;
+}
+.layout--wide { max-width: 720px; }
+.col--visual { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+
+/* Side-by-side once there's room. Keeps big monitors from looking empty. */
+@media (min-width: 1000px) {
+  .layout {
+    max-width: 1100px;
+    flex-direction: row;
+    align-items: center;
+    gap: 64px;
+  }
+  .col { flex: 1 1 0; min-width: 0; }
+  .col--text { max-width: 480px; }
+}
+
+/* ── Typography ─────────────────────────────────────────────────────── */
+.chapter {
+  font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 18px;
+}
+
+/* Insight kicker — the "why", readable at a glance above the decision. */
+.kicker {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  margin: 0 0 20px;
+}
+.kicker__tag {
+  flex: 0 0 auto;
+  padding: 6px 14px; border-radius: 100px;
+  background: rgba(124,111,205,.2);
+  border: 1px solid rgba(124,111,205,.55);
+  color: #c2b8ff;
+  font-size: 11.5px; font-weight: 600;
+  letter-spacing: 1.5px; text-transform: uppercase;
+}
+.kicker__tag--case {
+  background: rgba(244,98,44,.18);
+  border-color: rgba(244,98,44,.6);
+  color: #ffa377;
+}
+.kicker__txt {
+  font-size: clamp(1.08rem, 2.1vw, 1.32rem);
+  color: var(--fg); font-weight: 600; line-height: 1.35;
+}
+/* Sized to open a section of writing, not to tower over boxed fragments. The
+   old scale (up to 3rem) left a gap so wide between headline and body that the
+   two stopped reading as one thought — the step now reads as a short article:
+   heading, then prose. */
+.heading {
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 3.2vw, 2.15rem);
+  font-weight: 600; line-height: 1.2;
+  margin: 0 0 18px;
+  max-width: 22ch;             /* keeps it to two or three lines */
+}
+.heading--after-num { margin-top: 26px; }
+
+/* The case study's title screen. Deliberately larger than every other heading
+   in the flow — it is the name of the whole piece, not a step within it. */
+.heading--title {
+  font-size: clamp(2.5rem, 6vw, 4rem);
+  margin-bottom: 26px;
+}
+
+.casemeta {
+  font-size: 12.5px; letter-spacing: .6px;
+  color: var(--muted);
+  margin: -8px 0 24px;
+}
+/* Body copy now carries the walkthrough, so it reads at article contrast
+   (--soft, ~10.5:1) rather than the dimmer supporting-text tone, and
+   consecutive paragraphs get real separation instead of an 8px nudge. */
+.body {
+  font-size: clamp(1rem, 1.7vw, 1.1rem);
+  color: var(--soft); line-height: 1.75;
+  margin: 0 0 18px; max-width: 58ch;
+}
+.body + .body { margin-top: 0; }
+.body b { color: var(--fg); font-weight: 500; }
+/* Was used inside the removed evidence boxes to lift a phrase out of the
+   sentence; still doing that job, now inline in prose. */
+.body i { color: var(--fg); font-style: normal; font-weight: 600; }
+
+/* The title screen's only paragraph. Larger, and on --soft rather than
+   --muted: it is the first thing anyone reads, so it gets reading contrast
+   (~10.5:1) instead of the dimmer supporting-text tone. */
+.body--lead {
+  font-size: clamp(1.05rem, 2vw, 1.28rem);
+  color: var(--soft);
+  line-height: 1.7;
+  max-width: 46ch;
+  margin-bottom: 32px;
+}
+
+/* The "why" block — the evidence that drove each decision. */
+.because {
+  position: relative;
+  margin: 0 0 24px;
+  padding: 18px 22px 19px 24px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 12px 12px 0;
+  background: rgba(124,111,205,.12);
+  font-size: clamp(.98rem, 1.6vw, 1.08rem);
+  line-height: 1.72;
+  color: var(--soft);
+  max-width: 54ch;
+}
+.because b {
+  display: block;
+  color: #c2b8ff; font-weight: 600;
+  font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.because i { color: var(--fg); font-style: normal; font-weight: 600; }
+
+/* Evidence chain on the decision screens.
+   Order is deliberate and must stay: decision (the heading) → the research
+   that was run → the insight it produced. The insight is the payoff, so it
+   carries the accent colour. */
+.evidence { margin: 0 0 26px; max-width: 54ch; }
+.evidence__step {
+  position: relative;
+  margin: 0;
+  padding: 16px 20px 17px 22px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 12px 12px 0;
+  background: rgba(124,111,205,.12);
+  font-size: clamp(.98rem, 1.6vw, 1.08rem);
+  line-height: 1.72;
+  color: var(--soft);
+}
+.evidence__step + .evidence__step { margin-top: 10px; }
+.evidence__step b {
+  display: block;
+  color: #c2b8ff; font-weight: 600;
+  font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase;
+  margin-bottom: 9px;
+}
+.evidence__step--insight {
+  border-left-color: var(--primary);
+  background: rgba(244,98,44,.12);
+  color: var(--fg);
+  font-weight: 500;
+}
+.evidence__step--insight b { color: #ffa377; }
+.hint {
+  font-size: 13.5px; color: var(--soft); letter-spacing: .3px;
+  margin: 18px 0 0;
+  animation: fade-in .5s 1.6s both;
+}
+.hint b { color: var(--primary); font-weight: 600; }
+
+/* Advance control for the mockup screens. Sits directly above the laptop, so
+   it is next to the thing being demonstrated rather than in a text column that
+   can be a screen away on desktop.
+
+   The button is the primary path: nobody should have to hunt for a hotspot
+   inside a picture to get through the walkthrough. The hotspot in the mockup
+   still advances too, and the hint says so — it is there to show what you
+   would actually press in the product. */
+.stepnav {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 12px 16px;
+  margin: 0 0 16px;
+}
+.stepnav__hint { font-size: 13px; color: var(--muted); }
+.stepnav__hint b { color: var(--soft); font-weight: 600; }
+
+/* Tap cue — sits directly above the mockup it refers to, so the
+   instruction is next to the thing you have to click, not in a text
+   column that can be a screen away on desktop. */
+.tapcue {
+  display: inline-flex; align-items: center; gap: 10px;
+  margin: 0 0 4px;
+  padding: 11px 20px;
+  border-radius: 100px;
+  background: rgba(244,98,44,.14);
+  border: 1px solid rgba(244,98,44,.55);
+  color: var(--fg);
+  font-size: 14.5px; font-weight: 500;
+  animation: fade-in .5s 1.1s both;
+}
+.tapcue b { color: var(--primary); font-weight: 700; }
+.tapcue__arrow {
+  font-size: 19px; line-height: 1; color: var(--primary);
+  animation: nudge 1.5s ease-in-out infinite;
+}
+@keyframes nudge {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50%      { transform: translate3d(0, 5px, 0); }
+}
+/* Must end at 1: it is used with fill-mode `both`, so the end value
+   sticks. Ending below 1 left the outro overlay see-through. */
+@keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+
+/* ── The 80% ────────────────────────────────────────────────────────── */
+.bignum {
+  position: relative;
+  display: inline-block;
+  padding: 4px 6px;
+  cursor: pointer;
+  transition: transform .16s ease;
+}
+.bignum:hover  { transform: scale(1.04); }
+.bignum:active { transform: scale(.96); }
+.bignum__val {
+  position: relative;
+  font-family: var(--font-display);
+  font-size: clamp(4.5rem, 14vw, 8.5rem);
+  font-weight: 700; line-height: .95;
+  color: var(--primary);
+}
+/* Glow as a separate composited layer, so no text-shadow repaints. */
+.bignum__halo {
+  position: absolute; inset: -14%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(244,98,44,.32), transparent 72%);
+  opacity: 0;
+  animation: halo 3.2s ease-in-out infinite;
+}
+@keyframes halo {
+  0%,100% { opacity: 0 }
+  50%     { opacity: 1 }
+}
+
+/* ── Pulsing "click me" ring (transform + opacity only) ─────────────── */
+.ring {
+  position: absolute; inset: -7px;
+  border: 1.5px solid var(--primary);
+  border-radius: 14px;
+  pointer-events: none;
+  opacity: 0;
+  animation: ring 2.1s ease-out infinite;
+}
+.ring--tight { inset: -4px; border-radius: 100px; }
+@keyframes ring {
+  0%   { opacity: .75; transform: scale(1); }
+  70%  { opacity: 0;   transform: scale(1.14); }
+  100% { opacity: 0;   transform: scale(1.14); }
+}
+
+/* ── Photos ─────────────────────────────────────────────────────────── */
+.photo { position: relative; margin: 0; width: 100%; border-radius: 14px; overflow: hidden; }
+.photo img { width: 100%; height: 210px; object-fit: cover; object-position: center 32%; }
+.photo__fade {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(to bottom, var(--bg) 0%, transparent 52%, transparent 62%, var(--bg) 100%),
+    linear-gradient(to right,  var(--bg) 0%, transparent 13%, transparent 87%, var(--bg) 100%);
+}
+.photo--inset { border: 1px solid var(--line); }
+.photo--inset img { height: 160px; object-position: center 20%; }
+.photo--inset figcaption {
+  position: absolute; left: 14px; bottom: 9px;
+  font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase;
+  color: rgba(238,237,245,.72);
+  text-shadow: 0 1px 6px rgba(0,0,0,.9);
+}
+.photo--inset[hidden] { display: none; }
+.photo--inset:not([hidden]) { animation: screen-in .45s both; }
+
+/* ═══ LAPTOP SHELL ══════════════════════════════════════════════════ */
+.laptop { width: 100%; max-width: 520px; }
+
+.laptop__lid {
+  background: #15151d;
+  border: 1px solid var(--line-md);
+  border-radius: 14px 14px 5px 5px;
+  padding: 11px 11px 15px;
+  box-shadow: 0 28px 70px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.03);
+}
+.laptop__screen {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--m-bg);
+  display: flex; flex-direction: column;
+}
+.laptop__chrome {
+  flex: 0 0 auto; height: 6.5%;
+  min-height: 16px;
+  background: #e2dbd1;
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 8px;
+}
+.dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+.dot--r { background: #e5695e } .dot--y { background: #e5b95e } .dot--g { background: #79bd6a }
+.urlbar {
+  margin-left: 8px; flex: 1;
+  background: #f6f2ec; border-radius: 100px;
+  font-size: 8px; color: #8b8479;
+  padding: 2px 8px;
+  overflow: hidden; white-space: nowrap;
+}
+.laptop__viewport { position: relative; flex: 1; overflow: hidden; }
+
+/* Base */
+.laptop__base {
+  position: relative;
+  width: 114%; margin-left: -7%; height: 13px;
+  background: linear-gradient(180deg, #23232e, #0e0e15);
+  border-radius: 0 0 9px 9px;
+  box-shadow: 0 14px 26px rgba(0,0,0,.55);
+}
+.laptop__base::after {
+  content: ""; position: absolute; top: 0; left: 50%;
+  transform: translateX(-50%);
+  width: 74px; height: 4px;
+  border-radius: 0 0 6px 6px;
+  background: rgba(255,255,255,.1);
+}
+
+/* ═══ MOCK SCREENS ══════════════════════════════════════════════════
+   Laid out at a fixed 640x400 design size, then scaled to fit by
+   app.js. Keeps every mock pixel-consistent at any viewport width. */
+.mock {
+  position: absolute; top: 0; left: 0;
+  width: 640px; height: 400px;
+  transform-origin: top left;
+  padding: 18px 22px;
+  display: flex; flex-direction: column; gap: 9px;
+  color: var(--m-ink);
+  font-size: 13px;
+}
+.mock--center { align-items: center; text-align: center; }
+
+.m-title { font-size: 17px; font-weight: 700; margin: 0; text-align: center; }
+.m-title--lg { font-size: 21px; }
+.m-c { text-align: center; }
+.m-sub { font-size: 14px; font-weight: 600; margin: 0; text-align: center; }
+.m-sub--quiet { font-weight: 400; color: var(--m-muted); font-size: 12px; }
+.m-tiny { font-size: 10.5px; color: #a49c90; margin: 0; }
+.m-tiny--label { color: var(--m-muted); }
+
+.m-banner {
+  background: var(--m-soft); color: var(--m-soft-ink);
+  border-radius: 100px; padding: 6px 16px;
+  font-size: 11.5px; text-align: center; margin: 0;
+  align-self: stretch;
+}
+.m-banner b { color: #24422f; }
+
+/* Pills */
+/* align-items:center, not the default stretch — otherwise every pill
+   matches the tallest and the hotspot's extra padding does nothing. */
+.m-pillrow { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+.m-pill {
+  position: relative;   /* anchors .ring — without this it escapes to .mock */
+  background: var(--m-card); border: 1px solid var(--m-line);
+  border-radius: 100px; padding: 6px 13px;
+  font-size: 11.5px; color: var(--m-ink);
+  white-space: nowrap;
+}
+.m-pill--sel { background: var(--m-green); border-color: var(--m-green); color: #fff; font-weight: 600; }
+.m-pill--warn { background: var(--m-pink); border-color: transparent; color: var(--m-pink-ink); }
+
+/* Cards / charts */
+.m-cards { display: flex; gap: 10px; flex: 1; min-height: 0; }
+.m-card {
+  flex: 1; background: var(--m-card); border-radius: 12px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+  min-width: 0;
+}
+.m-card__h { font-size: 12px; font-weight: 700; margin: 0; text-align: center; }
+.m-pie-wrap { display: flex; align-items: center; gap: 12px; }
+.m-pie {
+  width: 84px; height: 84px; border-radius: 50%; flex: 0 0 auto;
+  background: conic-gradient(#4a90d9 0 64.8%, #9b7fd4 64.8% 84.8%, #6fbf73 84.8% 96.8%, #e8c33a 96.8% 100%);
+}
+.m-legend { list-style: none; margin: 0; padding: 0; font-size: 10.5px; color: #4a4640; }
+.m-legend li { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; white-space: nowrap; }
+.m-legend i { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.m-legend b { margin-left: auto; font-weight: 600; }
+
+.m-timeline { display: flex; gap: 7px; flex: 1; min-height: 0; }
+.m-tl__hours {
+  display: flex; flex-direction: column; justify-content: space-between;
+  font-size: 8.5px; color: #a49c90; padding: 2px 0;
+}
+.m-tl__track { flex: 1; display: flex; flex-direction: column; border-radius: 5px; overflow: hidden; }
+.m-tl__block { min-height: 4px; }
+.m-tl__block--now {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; color: #4a3d08;
+}
+
+/* Intention screen */
+.m-example {
+  align-self: stretch; background: #e7e1d8; border-radius: 12px;
+  padding: 9px 14px; text-align: left;
+}
+.m-example p { margin: 0; font-size: 12px; }
+.m-example__li { color: var(--m-muted); margin-top: 3px !important; }
+
+.m-input {
+  position: relative; align-self: stretch;
+  background: var(--m-card); border: 1px solid var(--m-line);
+  border-radius: 12px; padding: 14px 16px;
+  min-height: 62px;
+  display: flex; align-items: flex-start;
+  text-align: left; cursor: pointer;
+  transition: transform .16s ease;
+}
+.m-input__txt { font-size: 14px; color: var(--m-ink); }
+.m-mic {
+  position: absolute; right: 12px; bottom: 10px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #f2ede6; display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+}
+
+.m-field {
+  align-self: stretch; background: var(--m-card);
+  border-radius: 12px; padding: 9px 14px;
+  font-size: 13px; text-align: left;
+}
+.m-field--empty { color: #b3aca0; }
+
+/* Emotion chips */
+.m-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-start; align-items: center; }
+.m-chip {
+  position: relative;
+  background: var(--m-card); border: 1px solid var(--m-line);
+  border-radius: 100px; padding: 6px 12px;
+  font-size: 11.5px; color: var(--m-ink); white-space: nowrap;
+}
+.m-chip--sel {
+  background: var(--m-green); border-color: var(--m-green);
+  color: #fff; font-weight: 600; cursor: pointer;
+}
+
+/* Shipped list */
+.m-ship__head { text-align: center; }
+.m-ship {
+  align-self: stretch; background: var(--m-card);
+  border-radius: 12px; overflow: hidden;
+}
+.m-ship__row {
+  position: relative;
+  width: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 9px 14px;
+  border-bottom: 1px solid var(--m-line);
+  font-size: 12.5px; text-align: left;
+}
+.m-ship__row:last-child { border-bottom: 0; }
+.m-ship__row--cut { cursor: pointer; background: rgba(244,98,44,.07); }
+.m-tag {
+  position: relative;
+  font-size: 10px; padding: 3px 10px; border-radius: 100px; white-space: nowrap;
+}
+.m-tag--done { background: rgba(47,97,70,.12); color: var(--m-green); }
+.m-tag--next { border: 1px solid rgba(200,80,30,.65); color: #b5451c; font-weight: 600; }
+.m-tag--next .ring { border-color: #b5451c; }
+
+/* Buttons in mocks */
+.m-actions { display: flex; gap: 10px; align-self: stretch; margin-top: auto; }
+.m-btn {
+  border-radius: 100px; padding: 9px 22px;
+  font-size: 12.5px; font-weight: 600; text-align: center;
+}
+.m-btn--ghost { background: var(--m-card); border: 1px solid var(--m-line); color: var(--m-ink); }
+.m-btn--go { background: var(--m-green); color: #fff; flex: 1; }
+.m-btn--wide { flex: 1; }
+
+/* The green Continue inside the mockup is now the way forward, so it is a real
+   button carrying an orange pulse. The pulse is the only moving thing on the
+   screen — that is what makes it read as "click here" without a caption. */
+.m-go {
+  position: relative;
+  border: 0; cursor: pointer;
+  font-family: inherit;
+  transition: transform .16s ease, filter .16s ease;
+}
+.m-go:hover  { transform: scale(1.04); filter: brightness(1.08); }
+.m-go:active { transform: scale(.97); }
+.m-go:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+
+.m-go__ring {
+  position: absolute; inset: -5px;
+  border: 2px solid var(--primary);
+  border-radius: 100px;
+  pointer-events: none;
+  opacity: 0;
+  animation: m-go-pulse 1.9s ease-out infinite;
+}
+@keyframes m-go-pulse {
+  0%   { opacity: .9; transform: scale(1); }
+  70%  { opacity: 0;  transform: scale(1.16); }
+  100% { opacity: 0;  transform: scale(1.16); }
+}
+
+/* The advance button for the one mockup with no Continue of its own. */
+.cta--below { margin-top: 20px; }
+
+/* Clickable hotspot inside a mock.
+   These are the only way forward, so they are deliberately bigger and
+   louder than the surrounding (decorative) mockup chrome. The outline is
+   static — no repaint cost — with the pulsing ring layered on top. */
+.m-hot {
+  position: relative; z-index: 2;
+  cursor: pointer; transition: transform .16s ease;
+  outline: 2.5px solid var(--primary);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(244,98,44,.14);
+}
+.m-hot:hover  { transform: scale(1.08); }
+.m-hot:active { transform: scale(.97); }
+.m-hot:focus-visible { outline-width: 3.5px; outline-offset: 5px; }
+
+/* Scale each hotspot up over its non-clickable siblings */
+.m-pill--sel.m-hot { padding: 9px 18px; font-size: 14px; font-weight: 700; }
+.m-chip--sel.m-hot { padding: 9px 17px; font-size: 14px; font-weight: 700; }
+.m-input.m-hot     { min-height: 74px; padding: 17px 18px; }
+.m-input.m-hot .m-input__txt { font-size: 16px; font-weight: 500; }
+.m-ship__row--cut  { padding: 14px; }
+.m-ship__row--cut > span:first-child { font-size: 14px; font-weight: 600; color: var(--m-ink); }
+.m-tag--next       { font-size: 12.5px; padding: 5px 14px; }
+
+/* The mock is drawn at 640x400 then scaled down, so a 43x18 pill can end
+   up ~8px tall on a phone. --inv is 1/scale (set in app.js); this keeps
+   the actual touch target at >=46 real pixels at any size. Invisible. */
+.m-hot::before {
+  content: "";
+  position: absolute; left: 50%; top: 50%;
+  width:  max(100%, calc(46px * var(--inv, 1)));
+  height: max(100%, calc(46px * var(--inv, 1)));
+  transform: translate(-50%, -50%);
+}
+
+/* ═══ DOUBLE DIAMOND ════════════════════════════════════════════════ */
+.dd { width: 100%; max-width: 600px; user-select: none; }
+.dd__space { fill: rgba(154,154,178,.6); font-size: 10px; font-family: var(--font-body); letter-spacing: 1.5px; }
+.dd__divider { stroke: rgba(255,255,255,.08); stroke-width: 1; stroke-dasharray: 4 4; }
+.dd__mid { stroke: rgba(255,255,255,.05); stroke-width: 1; }
+
+.dd__tri { fill: rgba(22,22,29,.6); stroke: rgba(255,255,255,.08); stroke-width: 1; transition: fill .25s, stroke .25s; }
+.dd__num { font-family: var(--font-display); font-size: 32px; font-weight: 700; fill: rgba(255,255,255,.08); transition: fill .25s; pointer-events: none; }
+.dd__label { font-family: var(--font-body); font-size: 13px; fill: rgba(154,154,178,.5); transition: fill .25s; }
+.dd__mark { font-family: var(--font-body); font-size: 12px; pointer-events: none; }
+
+.dd__stage--next .dd__tri   { fill: rgba(244,98,44,.12); stroke: rgba(244,98,44,.55); cursor: pointer; }
+.dd__stage--next .dd__num   { fill: rgba(244,98,44,.6); }
+.dd__stage--next .dd__label { fill: var(--fg); cursor: pointer; }
+.dd__stage--next .dd__mark  { fill: rgba(244,98,44,.6); animation: blink 1.7s ease-in-out infinite; }
+.dd__stage--next:hover .dd__tri { stroke: rgba(244,98,44,.95); stroke-width: 1.5; }
+
+.dd__stage--done .dd__tri   { fill: rgba(124,111,205,.18); stroke: rgba(124,111,205,.45); }
+.dd__stage--done .dd__num   { fill: rgba(124,111,205,.5); }
+.dd__stage--done .dd__label { fill: rgba(124,111,205,.85); }
+.dd__stage--done .dd__mark  { fill: rgba(124,111,205,.6); }
+
+@keyframes blink { 0%,100% { opacity: .4 } 50% { opacity: 1 } }
+
+/* ═══ EMOJI GAME ════════════════════════════════════════════════════ */
+.game { position: relative; width: 100%; max-width: 520px; margin: 0 auto; }
+
+.game__sky {
+  position: relative; height: 200px;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 16px;
+  background: rgba(22,22,29,.45);
+}
+.game__label {
+  font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+  color: rgba(154,154,178,.55); text-align: center; margin: 12px 0;
+}
+.game__holes {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 14px 10px; justify-items: center;
+}
+.slot { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.slot__lab {
+  font-size: 9.5px; letter-spacing: .3px; text-align: center;
+  color: rgba(154,154,178,.5);
+  transition: color .3s;
+  min-height: 12px;
+}
+.slot.is-filled .slot__lab { color: rgba(160,150,222,.95); }
+
+.orb {
+  position: absolute;
+  width: 52px; height: 52px;
+  margin: -26px 0 0 -26px;
+  font-size: 34px; line-height: 52px; text-align: center;
+  cursor: pointer; user-select: none;
+  animation: float var(--dur) ease-in-out infinite var(--delay);
+  transition: transform .16s ease;
+}
+.orb:hover { animation-play-state: paused; transform: scale(1.2); }
+/* .is-flying is driven by the Web Animations API in app.js, so the CSS
+   float loop must be off or the two would fight over `transform`. */
+.orb.is-flying { animation: none; pointer-events: none; z-index: 30; }
+
+/* In flight the orb is re-parented to <body> so it can ricochet off the real
+   window edges rather than being boxed inside .game__sky. `fixed` is genuinely
+   viewport-relative here because <body> carries no transform; the margin reset
+   matters because the rect it is pinned to already includes the -26px centring
+   offset above. */
+.orb.is-loose {
+  position: fixed;
+  margin: 0;
+  z-index: 400;
+}
+
+@keyframes float {
+  0%,100% { transform: translate3d(0,0,0) rotate(-1.5deg); }
+  50%     { transform: translate3d(0,-11px,0) rotate(1.5deg); }
+}
+
+.hole {
+  width: 56px; height: 56px; border-radius: 50%;
+  border: 1.5px dashed rgba(255,255,255,.18);
+  background: rgba(22,22,29,.6);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px;
+  transition: border-color .3s, background .3s, transform .3s;
+}
+.hole.is-filled {
+  border-style: solid;
+  border-color: rgba(124,111,205,.55);
+  background: rgba(124,111,205,.14);
+}
+.hole.is-hit { animation: thud .34s ease-out; }
+@keyframes thud {
+  0%   { transform: scale(1) }
+  35%  { transform: scale(.88) }
+  100% { transform: scale(1) }
+}
+.hole span { animation: land .34s cubic-bezier(.34,1.56,.64,1) both; }
+@keyframes land {
+  from { transform: scale(.3); opacity: 0 }
+  to   { transform: scale(1);  opacity: 1 }
+}
+
+.game__win {
+  position: absolute; inset: -8px;
+  border-radius: 18px;
+  background: rgba(12,12,17,.88);
+  backdrop-filter: blur(6px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px;
+  animation: fade-in .3s both;
+}
+.game__win[hidden] { display: none; }
+.game__check { font-size: 46px; animation: land .5s .1s both; }
+.game__win p { color: var(--fg); font-size: 15px; margin: 0; opacity: .85; }
+
+/* ═══ BACK ══════════════════════════════════════════════════════════ */
+/* Sits in the flow beneath the step's text rather than pinned to the viewport
+   corner, so it reads as "the previous step" next to the copy it belongs to.
+   Orange to match the forward controls — the two are a pair. */
+.back {
+  display: inline-block;
+  margin: 18px 0 0;
+  padding: 9px 18px;
+  font-size: 12.5px; letter-spacing: .4px;
+  color: var(--primary); cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--primary);
+  border-radius: 100px;
+  transition: background .2s, color .2s;
+}
+.back:hover { background: var(--primary); color: #fff; }
+.back[hidden] { display: none; }
+
+/* ═══ CTA / LINKS ═══════════════════════════════════════════════════ */
+.cta {
+  display: inline-block;
+  padding: 14px 30px; border-radius: 100px;
+  background: var(--primary); color: #fff;
+  font-size: 14px; font-weight: 500; text-decoration: none;
+  cursor: pointer;
+  transition: transform .16s ease;
+  animation: screen-in .4s both;
+}
+.cta:hover  { transform: scale(1.05); }
+.cta:active { transform: scale(.96); }
+.cta[hidden] { display: none; }
+
+/* ═══ OUTRO ═════════════════════════════════════════════════════════ */
+.outro {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--bg);
+  display: flex; justify-content: center;
+  /* Starts below the fixed bar, which now sits above this layer. */
+  padding: calc(var(--topbar-h) + 30px) 24px 40px;
+  overflow-y: auto;
+  animation: fade-in .4s both;
+}
+.outro[hidden] { display: none; }
+/* margin:auto rather than align-items:center — centres on tall windows
+   but never clips the top when the content is taller than the viewport. */
+/* width:100% is required — as a flex item it would otherwise shrink to
+   fit its widest child and the stat grid would drop to 3 columns. */
+.outro__inner { width: 100%; max-width: 560px; text-align: center; margin: auto; }
+.outro__h {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 6vw, 3.2rem);
+  font-weight: 600; line-height: 1.15; margin: 0 0 18px;
+  animation: screen-in .5s .15s both;
+}
+.outro__p {
+  color: var(--muted); font-size: 15px; line-height: 1.75;
+  margin: 0 auto 30px; max-width: 44ch;
+  animation: screen-in .5s .3s both;
+}
+.outro .chapter { animation: fade-in .5s both; }
+
+.stats {
+  list-style: none; margin: 0 0 32px; padding: 0;
+  /* Explicit, not auto-fit: auto-fit lands on 3 columns at mid widths,
+     which leaves a lonely fourth card on its own row. */
+  display: grid; grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+  animation: screen-in .5s .45s both;
+}
+@media (min-width: 620px) {
+  .stats { grid-template-columns: repeat(4, 1fr); }
+}
+.stats li {
+  border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px 8px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.stats b {
+  font-family: var(--font-display);
+  font-size: 26px; font-weight: 700; color: var(--primary);
+}
+.stats span { font-size: 10.5px; color: var(--muted); line-height: 1.45; }
+
+.outro__links {
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  animation: screen-in .5s .6s both;
+}
+.lnk {
+  color: var(--muted); font-size: 13.5px;
+  text-decoration: none; border-bottom: 1px solid var(--line-md);
+  padding-bottom: 2px;
+  transition: color .2s, border-color .2s;
+}
+.lnk:hover { color: var(--primary); border-color: var(--primary); }
+
+.restart {
+  margin-top: 34px; padding: 11px 26px;
+  border: 1px solid var(--line-md); border-radius: 100px;
+  color: var(--muted); font-size: 13px; cursor: pointer;
+  transition: color .2s, border-color .2s;
+  animation: fade-in .5s .8s both;
+}
+.restart:hover { color: var(--primary); border-color: var(--primary); }
+
+/* ═══ LANDING PAGE ══════════════════════════════════════════════════ */
+.home {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 120px 28px 100px;
+}
+.home[hidden] { display: none; }
+
+/* ── Hero ───────────────────────────────────────────────────────────── */
+.hero {
+  display: grid;
+  gap: 40px;
+  align-items: center;
+  padding-bottom: 76px;
+}
+@media (min-width: 900px) {
+  /* The media column is the wider of the two now, and `stretch` is what makes
+     the image exactly as tall as the copy beside it. */
+  .hero { grid-template-columns: 1fr 1.15fr; gap: 64px; align-items: stretch; }
+}
+
+.hero__eyebrow {
+  font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 18px;
+}
+.hero__h1 {
+  font-family: var(--font-display);
+  font-size: clamp(2.6rem, 6.4vw, 4.2rem);
+  font-weight: 600; line-height: 1.08;
+  margin: 0 0 22px;
+}
+.hero__lead {
+  color: var(--soft);
+  font-size: clamp(1.05rem, 2.1vw, 1.22rem);
+  line-height: 1.7;
+  max-width: 46ch;
+  margin: 0 0 34px;
+}
+.hero__actions { display: flex; flex-wrap: wrap; gap: 14px; }
+
+.ghostbtn {
+  padding: 14px 26px; border-radius: 100px;
+  border: 1px solid var(--line-md);
+  color: var(--soft); font-size: 14px; font-weight: 500;
+  cursor: pointer;
+  transition: color .2s, border-color .2s, transform .16s;
+}
+.ghostbtn:hover  { color: var(--primary); border-color: var(--primary); }
+.ghostbtn:active { transform: scale(.97); }
+
+/* Placeholder blocks — deliberately obvious, meant to be replaced */
+.ph {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 300px;
+  border: 1.5px dashed rgba(255,255,255,.18);
+  border-radius: 18px;
+  background:
+    repeating-linear-gradient(45deg,
+      rgba(255,255,255,.022) 0 12px,
+      transparent 12px 24px);
+}
+.ph__label {
+  font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase;
+  color: var(--muted);
+}
+/* Marks copy that still needs the real wording from the design file. */
+.ph-text { border-bottom: 1px dashed rgba(255,255,255,.16); }
+
+/* ── Challenge section ──────────────────────────────────────────────── */
+.challenge { border-top: 1px solid var(--line); padding-top: 34px; }
+
+.challenge__bar {
+  display: flex; flex-wrap: wrap;
+  align-items: flex-end; justify-content: space-between;
+  gap: 22px 40px;
+  margin-bottom: 30px;
+}
+.challenge__eyebrow {
+  font-size: 11.5px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--sq-red); font-weight: 600;
+  margin: 0 0 8px;
+}
+.challenge__h {
+  font-family: var(--font-display);
+  font-size: clamp(1.7rem, 4vw, 2.4rem);
+  font-weight: 600; line-height: 1.1;
+  margin: 0;
+}
+
+.challenge__meter { min-width: 210px; flex: 0 1 260px; }
+.challenge__count {
+  font-size: 13px; color: var(--muted);
+  margin: 0 0 9px; text-align: right;
+}
+.challenge__count b {
+  font-family: var(--font-display);
+  font-size: 22px; font-weight: 700; color: var(--fg);
+}
+.challenge__count span { opacity: .75; }
+
+.meter {
+  height: 6px; border-radius: 100px;
+  background: rgba(255,255,255,.09);
+  overflow: hidden;
+}
+.meter__fill {
+  height: 100%; border-radius: 100px;
+  background: var(--sq-red);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform .7s cubic-bezier(.22,1,.36,1);
+}
+
+/* ── The 30 squares ─────────────────────────────────────────────────── */
+/* Five per row. A fixed count, not auto-fill, so the tiles grow with the
+   container instead of multiplying — they are the page's main visual and
+   need the size. app.js reads the real column count back out of
+   getComputedStyle to know where to drop an opened card, so changing
+   these numbers is safe and needs no matching change in the JS. */
+.grid30 {
+  list-style: none; margin: 0; padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+}
+.grid30 > li { display: flex; }
+
+.sq {
+  position: relative;
+  width: 100%; aspect-ratio: 1;
+  border: 0; border-radius: 18px;
+  background: var(--sq-red);
+  display: flex; flex-direction: column;
+  align-items: flex-start; justify-content: flex-start;
+  padding: 16px 17px;
+  text-align: left;
+  color: #fff;
+  overflow: hidden;
+}
+.sq__n {
+  font-family: var(--font-display);
+  font-size: 30px; font-weight: 700; line-height: 1;
+  color: #fff;
+}
+.sq__name {
+  margin-top: auto;
+  font-size: 14px; font-weight: 600; line-height: 1.3;
+  color: #fff;
+}
+
+/* Any square you can open. */
+.sq--live {
+  cursor: pointer;
+  transition: transform .18s ease, box-shadow .18s ease;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.85), 0 10px 24px rgba(0,0,0,.45);
+}
+.sq--live:hover  { transform: translateY(-3px) scale(1.03); }
+.sq--live:active { transform: scale(.98); }
+.sq--live::after {
+  /* keeps the whole tile a comfortable target */
+  content: ""; position: absolute; inset: 0;
+}
+.sq[aria-expanded="true"] {
+  box-shadow: 0 0 0 3px var(--fg), 0 14px 30px rgba(0,0,0,.5);
+}
+
+/* ── The three statuses ─────────────────────────────────────────────────
+   Every colour below carries white numerals at 5:1 or better, so no square
+   is ever a guess. Note what is NOT here: a dimmed "not yet" state. At
+   opacity .34 the numbers fell to ~2:1 and became unreadable — progress is
+   shown by the meter, never by fading a square out. */
+
+/* Not started — the default for all 30. */
+.sq--todo { background: var(--sq-red); }          /* white on this: 4.7:1 */
+
+/* Started — deep amber, not a light yellow. White on a light yellow is about
+   1.7:1; on this it is 5.2:1. */
+.sq--started { background: #9a6b00; }
+
+/* Published with no screenshot yet — the whole square goes green. 5:1. */
+.sq--published { background: #15803d; }
+
+/* Published WITH a screenshot — the image is the square, and the number moves
+   onto a solid green disc so it stays readable over an image we cannot
+   predict. A scrim alone is not enough on a light screenshot. */
+.sq--shot { background: var(--card); padding: 0; }
+.sq--shot .sq__shot {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.sq--shot .sq__n {
+  position: absolute; z-index: 2;
+  top: 12px; left: 12px;
+  width: 44px; height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: #15803d;
+  box-shadow: 0 2px 8px rgba(0,0,0,.55);
+  font-size: 21px;
+}
+
+.sq--todo:not(.sq--live),
+.sq--started:not(.sq--live) { cursor: default; }
+
+/* ── The opened card ────────────────────────────────────────────────────
+   Spans the full grid width and sits directly under the row holding the
+   square you clicked. Framed like a trading card — but the type is sized
+   for actual reading, which a real trading card's is not. */
+/* ── Hero image ─────────────────────────────────────────────────────── */
+/* overflow:hidden is a guard, not cosmetics — if a crop is ever severe enough
+   to push the hotspot past the image edge, this clips it rather than leaving
+   an invisible clickable area sitting over whatever is next to it. */
+.hero__media { position: relative; overflow: hidden; border-radius: 18px; }
+
+.hero__img {
+  display: block;
+  width: 100%; height: auto;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+}
+
+/* On desktop the media column still spans exactly the copy column's height —
+   eyebrow top to button bottom — but the artwork is `contain`, not `cover`.
+
+   The art is 3:2 and this slot is about 1.07:1, so `cover` would crop ~28% off
+   one side. The painted "Go to challenge" button sits at the far left and
+   Marianne's photo at the far right, so there is no crop that keeps both:
+   anything that fills the slot loses one of them. `contain` shows all of it.
+   If you would rather it fill the slot edge to edge, re-crop the source to
+   roughly 1.07:1 and this can go back to `cover`. */
+@media (min-width: 900px) {
+  .hero__media { height: 100%; }
+  .hero__img { height: 100%; object-fit: contain; object-position: center; }
+}
+
+/* The transparent control over the painted "Go to challenge" button.
+   Invisible by default so the artwork reads as designed, but it must still
+   be findable by keyboard — hence the hover ring and the focus outline. */
+.hero__hotspot {
+  position: absolute; z-index: 2;
+  background: none; border: 0; padding: 0; margin: 0;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: box-shadow .16s ease;
+}
+.hero__hotspot[hidden] { display: none; }
+/* The ring sits just outside the hotspot, and the hotspot is measured to the
+   painted button's exact pixels, so the stroke traces the button's edge. */
+.hero__hotspot:hover { box-shadow: 0 0 0 4px var(--primary); }
+.hero__hotspot:focus-visible {
+  outline: 3px solid var(--fg);
+  outline-offset: 3px;
+}
+
+/* `.grid30 > li` sets display:flex and outranks a bare `.appcard`, so the
+   card has to win the specificity contest explicitly or it never lays out. */
+.grid30 > li.appcard { display: grid; }
+.appcard {
+  grid-column: 1 / -1;
+  background: linear-gradient(160deg, #1c1c26 0%, #14141b 100%);
+  border: 3px solid var(--sq-red);
+  border-radius: 22px;
+  padding: 26px;
+  /* Single column: the screenshot gets the full width and the words sit under
+     it. Editing keeps the same shape, so pressing the pencil does not make the
+     card jump to a different layout. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  animation: card-in .28s cubic-bezier(.22,1,.36,1) both;
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: none; }
+}
+.appcard__shotwrap {
+  border: 2px solid var(--line-md);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0a0a0e;
+  align-self: start;
+}
+.appcard__shot { display: block; width: 100%; height: auto; }
+.appcard__shot--empty {
+  aspect-ratio: 16 / 10;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 15px; text-align: center; padding: 20px;
+}
+.appcard__body { display: flex; flex-direction: column; min-width: 0; }
+.appcard__num {
+  font-size: 13px; font-weight: 700; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--sq-red);
+  margin: 0 0 6px;
+}
+.appcard__name {
+  font-family: var(--font-display);
+  font-size: clamp(1.7rem, 2.6vw, 2.3rem);
+  font-weight: 700; line-height: 1.12;
+  margin: 0 0 14px; color: var(--fg);
+}
+.appcard__desc {
+  font-size: 18px; line-height: 1.55;
+  color: var(--soft); margin: 0 0 22px;
+}
+.appcard__foot {
+  margin-top: auto;
+  display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+}
+.appcard__close {
+  background: none; border: 1px solid var(--line-md);
+  color: var(--muted); border-radius: 100px;
+  padding: 11px 20px; font-size: 15px; cursor: pointer;
+  font-family: var(--font-body);
+}
+.appcard__close:hover { color: var(--fg); border-color: var(--fg); }
+.appcard__badge {
+  display: inline-block; padding: 7px 15px; border-radius: 100px;
+  font-size: 13.5px; font-weight: 700; letter-spacing: .4px;
+  text-transform: uppercase;
+}
+.appcard__badge--started   { background: #9a6b00; color: #fff; }
+.appcard__badge--todo      { background: var(--sq-red); color: #fff; }
+.appcard__badge--published { background: #15803d; color: #fff; }
+
+/* ── The card as a finished thing, not a form ───────────────────────── */
+/* One column so the screenshot runs the full width of the card. The old
+   two-column split gave the image half the space and made it read as a
+   thumbnail beside a form. */
+.appcard--read,
+.appcard { position: relative; }
+
+.appcard__head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; margin-bottom: 10px;
+}
+.appcard__head .appcard__num { margin: 0; }
+
+/* The published link. Blue and underlined — the one place on this dark page
+   where a plain web link belongs, so it should look like one. */
+.appcard__link {
+  display: inline-block;
+  color: #7cc0ff;
+  font-size: 16px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  word-break: break-all;
+  margin: 0 0 22px;
+}
+.appcard__link:hover { color: #a9d6ff; }
+
+/* Full-width screenshot in the read view. */
+.appshot {
+  margin: 0;
+  border: 2px solid var(--line-md);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0a0a0e;
+}
+.appshot img { display: block; width: 100%; height: auto; }
+.appshot--process { width: 72%; }
+
+/* The pencil. Floats in the corner so it never reflows the content. */
+.appcard__edit {
+  position: absolute; top: 16px; right: 16px;
+  width: 38px; height: 38px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--line-md);
+  background: rgba(0,0,0,.5);
+  color: var(--soft);
+  cursor: pointer;
+  transition: color .2s, border-color .2s, background .2s;
+}
+.appcard__edit:hover {
+  color: #fff; border-color: var(--primary); background: var(--primary);
+}
+
+.appcard__save {
+  border: 0; border-radius: 100px;
+  padding: 11px 26px; font-size: 15px; font-weight: 600;
+  background: var(--primary); color: #fff;
+  cursor: pointer; font-family: var(--font-body);
+}
+.appcard__save:hover { filter: brightness(1.08); }
+
+/* ── Card media column ──────────────────────────────────────────────── */
+.appcard__media { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* The behind-the-scenes image is deliberately the smaller of the two: the
+   published app is the headline, the process shot is supporting evidence. */
+.appcard__shotwrap--process { width: 72%; }
+.dropwrap--process { width: 72%; }
+.dropwrap { min-width: 0; }
+
+/* ── Drop zones ─────────────────────────────────────────────────────── */
+.drop {
+  position: relative;
+  border: 2px dashed var(--line-md);
+  border-radius: 14px;
+  background: rgba(0,0,0,.25);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color .16s ease, background .16s ease;
+}
+.drop:hover { border-color: var(--primary); background: rgba(244,98,44,.07); }
+.drop.is-over {
+  border-color: var(--primary);
+  border-style: solid;
+  background: rgba(244,98,44,.16);
+}
+/* Only the empty state needs a tall target to drop onto. Once an image is in,
+   the zone shrinks to the picture itself, so the picture is the thing you see
+   rather than a small thumbnail floating in a big dashed box. */
+.drop--shot    { min-height: 190px; }
+.drop--process { min-height: 130px; }
+.drop:has(.drop__img:not([hidden])) { min-height: 0; border-style: solid; border-color: var(--line-md); }
+.drop__img { display: block; width: 100%; height: auto; }
+.drop__img[hidden] { display: none; }
+
+.drop__remove {
+  display: block; width: 100%; margin-top: 8px;
+  padding: 9px 12px; border: 1px solid rgba(255,120,120,.4); border-radius: 8px;
+  background: transparent; color: #ff9b9b;
+  font: 500 12.5px var(--font-body); cursor: pointer;
+}
+.drop__remove:hover { border-color: #ff9b9b; background: rgba(255,120,120,.08); }
+.drop__remove[hidden] { display: none; }
+.drop__empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 26px 18px; text-align: center; min-height: inherit;
+}
+.drop__empty b { color: var(--fg); font-size: 15px; font-weight: 600; }
+.drop__empty span { color: var(--muted); font-size: 13px; }
+.drop__caption {
+  margin: 7px 2px 0; font-size: 12px; line-height: 1.5; color: var(--muted);
+}
+.drop__caption code {
+  color: var(--soft); font-size: 11.5px;
+  background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 4px;
+}
+.drop__save {
+  display: block; width: 100%; margin-top: 8px;
+  padding: 9px 12px; border: 1px solid var(--line-md); border-radius: 8px;
+  background: rgba(255,255,255,.04); color: var(--soft);
+  font: 500 12.5px var(--font-body); cursor: pointer;
+}
+.drop__save:hover { border-color: var(--primary); color: var(--fg); }
+
+/* ── Editable fields ────────────────────────────────────────────────── */
+.editlabel {
+  display: block; margin: 0 0 5px;
+  font-size: 11.5px; letter-spacing: 1.3px; text-transform: uppercase;
+  color: var(--muted); font-weight: 600;
+}
+/* The name reads as the card's title but has to LOOK typed-in-able: a dashed
+   underline at rest, a solid focus ring once you are in it. */
+.appcard__nameinput {
+  display: block; width: 100%;
+  margin: 0 0 16px; padding: 6px 10px 8px;
+  background: rgba(255,255,255,.03);
+  border: 0; border-bottom: 2px dashed var(--line-md);
+  border-radius: 8px 8px 0 0;
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 2.3vw, 2rem); font-weight: 700; line-height: 1.15;
+}
+.appcard__nameinput::placeholder { color: var(--muted); font-weight: 400; }
+.appcard__nameinput:hover { background: rgba(255,255,255,.06); border-bottom-color: var(--primary); }
+.appcard__nameinput:focus {
+  outline: none; background: rgba(255,255,255,.07);
+  border-bottom: 2px solid var(--primary);
+}
+.appcard__descinput,
+.appcard__urlinput {
+  display: block; width: 100%;
+  margin: 0 0 16px; padding: 11px 13px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--line-md); border-radius: 10px;
+  color: var(--soft);
+  font: 400 15px/1.6 var(--font-body);
+  resize: vertical;
+}
+.appcard__descinput::placeholder,
+.appcard__urlinput::placeholder { color: var(--muted); }
+.appcard__descinput:focus,
+.appcard__urlinput:focus { outline: none; border-color: var(--primary); color: var(--fg); }
+
+/* ── Status picker ──────────────────────────────────────────────────── */
+.statusset { border: 0; margin: 4px 0 20px; padding: 0; }
+.statusset__legend {
+  padding: 0; margin: 0 0 9px;
+  font-size: 11.5px; letter-spacing: 1.3px; text-transform: uppercase;
+  color: var(--muted); font-weight: 600;
+}
+.statusset__row { display: flex; flex-wrap: wrap; gap: 9px; }
+.statusopt {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 10px 16px; border-radius: 100px;
+  border: 2px solid var(--line-md);
+  background: rgba(255,255,255,.03);
+  color: var(--soft); font-size: 14px; font-weight: 500;
+  cursor: pointer;
+  transition: border-color .16s, background .16s, color .16s;
+}
+.statusopt:hover { color: var(--fg); border-color: rgba(255,255,255,.3); }
+/* The radio itself is hidden but still focusable, so keyboard users get the
+   ring below and arrow keys move between the three options as normal. */
+.statusopt__input { position: absolute; opacity: 0; width: 0; height: 0; }
+.statusopt__dot {
+  width: 15px; height: 15px; border-radius: 50%;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.35);
+  flex: 0 0 auto;
+}
+.statusopt--todo      .statusopt__dot { background: var(--sq-red); }
+.statusopt--started   .statusopt__dot { background: #9a6b00; }
+.statusopt--published .statusopt__dot { background: #15803d; }
+
+.statusopt__input:checked ~ .statusopt__txt { color: var(--fg); font-weight: 700; }
+.statusopt:has(.statusopt__input:checked) { background: rgba(255,255,255,.1); }
+.statusopt--todo:has(.statusopt__input:checked)      { border-color: var(--sq-red); }
+.statusopt--started:has(.statusopt__input:checked)   { border-color: #d97706; }
+.statusopt--published:has(.statusopt__input:checked) { border-color: #22a35a; }
+.statusopt:has(.statusopt__input:focus-visible) {
+  outline: 3px solid var(--fg); outline-offset: 2px;
+}
+/* Fallback for browsers without :has() — the checked option still reads as
+   selected through the bolder label text above. */
+
+/* ── Edit-mode chrome ───────────────────────────────────────────────── */
+/* Sits at the end of the grid it edits, rather than floating over every page.
+   It used to be position:fixed, which meant it followed you into the case
+   study and the About page — places where there is nothing for it to act on. */
+/* Same trap as the auth panel: this sets `display`, so it needs its own
+   [hidden] rule or the attribute does nothing and the editing controls show
+   to every visitor. */
+.editbar[hidden] { display: none; }
+
+.editbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  margin: 26px 0 0;
+  padding: 12px 16px;
+  background: var(--card); border: 1px solid var(--primary);
+  border-radius: 14px;
+  font: 13px var(--font-body); color: var(--fg);
+}
+.editbar__btn {
+  border: 0; border-radius: 100px; padding: 7px 15px;
+  background: var(--primary); color: #111;
+  font: 600 13px var(--font-body); cursor: pointer;
+}
+.editbar__btn--ghost {
+  background: none; border: 1px solid var(--line-md); color: var(--muted);
+}
+.editbar__btn--ghost:hover { color: var(--fg); border-color: var(--fg); }
+
+.editbar__tag { font-size: 11.5px; color: var(--muted); }
+/* Round portrait. `object-fit: cover` fills the circle without squashing the
+   photo — the corners are cropped away rather than the face being distorted,
+   whatever aspect ratio the source file happens to be. */
+.about__portrait {
+  display: block;
+  width: 108px; height: 108px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center 30%;   /* faces sit above centre in most photos */
+  border: 2px solid var(--line-md);
+  margin: 0 0 20px;
+}
+
+/* The reward line above the emoji game. Yellow with black text — the one
+   celebratory note in an otherwise dark, restrained palette, so it reads as
+   arrival rather than as another instruction. Black on this yellow is ~13:1. */
+.gamebanner {
+  margin: 0 0 14px;
+  padding: 12px 20px;
+  background: #f2c14e;
+  color: #111;
+  border-radius: 10px;
+  font-size: 14px; font-weight: 600;
+  text-align: center;
+  max-width: 100%;
+}
+
+.authwrap { position: relative; }
+.navlink--auth {
+  border-color: var(--line-md); color: var(--soft);
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.navlink--auth:hover { background: transparent; color: var(--fg); border-color: var(--soft); }
+
+/* Drawn from borders rather than a glyph, so it stays crisp at any size and
+   needs no icon font. Rotates to point up when the panel is open. */
+.authbtn__arrow {
+  width: 0; height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  transition: transform .18s ease;
+}
+.navlink--auth[aria-expanded="true"] .authbtn__arrow { transform: rotate(180deg); }
+
+/* Every rule that sets `display` on an element which also uses the `hidden`
+   attribute needs a matching [hidden] escape hatch. The browser's own
+   `[hidden] { display: none }` is a low-specificity UA rule, so any class-level
+   display silently defeats it — which is exactly why this panel stayed on
+   screen while its hidden attribute toggled correctly underneath. */
+.authpanel[hidden],
+.authwrap[hidden] { display: none; }
+
+.authpanel {
+  position: absolute; top: calc(100% + 10px); right: 0;
+  z-index: 20;
+  display: flex; flex-direction: column; gap: 8px;
+  width: 220px;
+  padding: 16px;
+  background: rgba(20,20,27,.97);
+  border: 1px solid var(--line-md);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(0,0,0,.4);
+  animation: fade-in .15s both;
+}
+.authpanel__label {
+  font-size: 11px; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--muted); margin: 4px 0 -4px;
+}
+.authpanel__input {
+  padding: 9px 10px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid var(--line-md);
+  border-radius: 8px;
+  color: var(--fg); font-size: 13.5px;
+  font-family: inherit;
+}
+.authpanel__input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.authpanel__go {
+  margin-top: 6px;
+  padding: 9px 0;
+  border-radius: 8px;
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: #fff; font-size: 13.5px; font-weight: 500;
+  cursor: pointer;
+}
+.authpanel__go:hover { filter: brightness(1.08); }
+.authpanel__err {
+  margin: 0; font-size: 12px; color: #ff9b9b;
+}
+.authpanel__form,
+.authpanel__signedin { display: flex; flex-direction: column; gap: 8px; }
+.authpanel__form[hidden],
+.authpanel__signedin[hidden] { display: none; }
+.authpanel__who {
+  margin: 0 0 2px; font-size: 12.5px; color: var(--soft);
+  word-break: break-all;
+}
+.authpanel__go--out {
+  background: transparent; color: var(--fg);
+  border-color: var(--line-md);
+}
+.authpanel__go--out:hover { border-color: var(--fg); filter: none; }
+
+@media (max-width: 720px) {
+  .authpanel { right: -10px; width: 200px; }
+}
+
+.exportbox {
+  position: fixed; z-index: 9999; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(760px, 92vw); height: 52vh; padding: 16px;
+  font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace;
+  background: #101017; color: #eee;
+  border: 2px solid var(--primary); border-radius: 12px;
+}
+.exportbox__done {
+  position: fixed; z-index: 10000; left: 50%; top: calc(50% + 26vh + 14px);
+  transform: translateX(-50%);
+  border: 0; border-radius: 100px; padding: 10px 22px;
+  background: var(--primary); color: #111;
+  font: 600 14px var(--font-body); cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .grid30 { grid-template-columns: repeat(4, 1fr); gap: 13px; }
+  .appcard { grid-template-columns: 1fr; gap: 20px; padding: 22px; }
+}
+
+@media (max-width: 560px) {
+  .home { padding: 132px 18px 70px; }
+  .hero { padding-bottom: 52px; }
+  .ph { min-height: 210px; }
+  .grid30 { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .sq { padding: 10px 11px; border-radius: 13px; }
+  .sq__n { font-size: 21px; }
+  .sq__name { font-size: 11px; }
+  .sq--building .sq__status { font-size: 10.5px; }
+  .sq--shipped .sq__n { margin: 10px 0 0 11px; }
+  .appcard__desc { font-size: 16.5px; }
+  .challenge__count { text-align: left; }
+  .challenge__meter { flex: 1 1 100%; }
+}
+
+/* ═══ ABOUT ME — a real page ════════════════════════════════════════
+   Not a dialog: it replaces the view the way the outro does, with its
+   own scroll, so it can hold real reading-length copy comfortably. */
+/* ── Other projects ─────────────────────────────────────────────────────
+   Same page mechanics as About. The type scale is deliberately larger than
+   the case study's: this page is read start-to-finish rather than clicked
+   through, so body copy sits at 19px with a 68ch measure — long enough to
+   avoid choppy lines, short enough that the eye finds the next one. */
+.work {
+  position: fixed; inset: 0; z-index: 300;
+  background: var(--bg);
+  overflow-y: auto;
+  padding-top: var(--topbar-h);
+  animation: fade-in .3s both;
+}
+.work[hidden] { display: none; }
+
+.work__page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 30px 24px 100px;
+}
+
+.work__intro { margin-bottom: 14px; }
+.work__h1 {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 4.4vw, 2.9rem);
+  font-weight: 600; line-height: 1.14;
+  margin: 6px 0 16px; color: var(--fg);
+}
+.work__h1:focus-visible { outline: 3px solid var(--primary); outline-offset: 6px; }
+.work__lead {
+  font-size: clamp(1.05rem, 2vw, 1.2rem);
+  line-height: 1.68; color: var(--soft);
+  margin: 0; max-width: 60ch;
+}
+
+/* Each project is a card-like band. The rule between them does the separating
+   work so the sections do not need boxes, which would fight the dark page. */
+/* The section numbers come from document order, not from the markup, so the
+   three can be reordered by moving the blocks alone — no renumbering to get
+   wrong. The counter resets on the page, not on each section. */
+.work__page { counter-reset: workproj; }
+
+.work__proj {
+  counter-increment: workproj;
+  border-top: 1px solid var(--line-md);
+  padding-top: 40px;
+  margin-top: 48px;
+}
+
+.work__eyebrow {
+  display: flex; align-items: center; gap: 12px;
+  margin: 0 0 10px;
+  font-size: 13px; font-weight: 600;
+  letter-spacing: 1.6px; text-transform: uppercase;
+  color: var(--primary);
+}
+/* The number is the scanning anchor — it tells you where you are in the three
+   without having to read the role title. */
+.work__idx {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; flex: 0 0 auto;
+  border: 1px solid var(--primary);
+  border-radius: 50%;
+  font-size: 13px; letter-spacing: 0;
+}
+.work__idx::before { content: counter(workproj, decimal-leading-zero); }
+.work__h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.55rem, 3vw, 2.05rem);
+  font-weight: 600; line-height: 1.2;
+  margin: 0 0 8px; color: var(--fg);
+}
+.work__meta {
+  margin: 0 0 22px;
+  font-size: 13.5px; letter-spacing: .5px;
+  color: var(--muted);
+}
+
+/* The one-line summary sits bigger than the body: it is the sentence someone
+   reads if they read nothing else in the section. */
+.work__lead-in {
+  font-size: clamp(1.08rem, 1.9vw, 1.24rem);
+  line-height: 1.6; color: var(--fg);
+  margin: 0 0 22px; max-width: 62ch;
+  padding-left: 16px;
+  border-left: 3px solid var(--primary);
+}
+
+.work__body p {
+  font-size: clamp(1.02rem, 1.7vw, 1.19rem);
+  line-height: 1.75; color: var(--soft);
+  margin: 0 0 18px; max-width: 68ch;
+}
+
+.work__h3 {
+  font-size: 13px; font-weight: 600;
+  letter-spacing: 1.6px; text-transform: uppercase;
+  color: var(--soft);
+  margin: 30px 0 14px;
+}
+.work__list {
+  margin: 0; padding: 0; list-style: none;
+  max-width: 68ch;
+}
+.work__list li {
+  position: relative;
+  padding-left: 26px;
+  margin-bottom: 12px;
+  font-size: clamp(1.02rem, 1.7vw, 1.19rem);
+  line-height: 1.7; color: var(--soft);
+}
+.work__list li::before {
+  content: ""; position: absolute;
+  left: 4px; top: .62em;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--primary);
+}
+
+/* Numbered process steps. The number sits in its own column so every step
+   title starts on the same left edge — the list reads as a sequence at a
+   glance, which is the whole point of showing process work. */
+.work__steps {
+  list-style: none;
+  margin: 0; padding: 0;
+  counter-reset: workstep;
+  max-width: 68ch;
+}
+.work__steps > li {
+  counter-increment: workstep;
+  position: relative;
+  padding-left: 52px;
+  padding-bottom: 20px;
+}
+.work__steps > li::before {
+  content: counter(workstep);
+  position: absolute; left: 0; top: -2px;
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: rgba(244,98,44,.14);
+  border: 1px solid rgba(244,98,44,.5);
+  color: var(--primary);
+  font-size: 14px; font-weight: 600;
+}
+/* A hairline joins one step to the next, so the sequence reads as continuous
+   rather than as six unrelated items. Not on the last one. */
+.work__steps > li::after {
+  content: ""; position: absolute;
+  left: 17px; top: 38px; bottom: 4px;
+  width: 1px; background: var(--line-md);
+}
+.work__steps > li:last-child { padding-bottom: 0; }
+.work__steps > li:last-child::after { display: none; }
+
+.work__step-h {
+  margin: 4px 0 6px;
+  font-size: clamp(1.02rem, 1.7vw, 1.16rem);
+  font-weight: 600; line-height: 1.35;
+  color: var(--fg);
+}
+.work__steps p {
+  margin: 0;
+  font-size: clamp(1rem, 1.6vw, 1.12rem);
+  line-height: 1.7; color: var(--soft);
+}
+
+/* Where a project's status belongs after the method, not buried in it. */
+.work__status {
+  margin: 24px 0 0;
+  padding: 14px 18px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  background: rgba(124,111,205,.12);
+  font-size: clamp(1rem, 1.6vw, 1.1rem);
+  color: var(--fg);
+  max-width: 62ch;
+}
+
+.work__figures { display: flex; flex-direction: column; gap: 26px; }
+
+.work__figure { margin: 28px 0 0; }
+.work__figures .work__figure { margin: 0; }
+.work__figure[hidden] { display: none; }
+/* `width: auto` rather than `100%`: these screenshots vary from 273px to
+   1023px wide, and forcing them all to the column width upscaled the small
+   ones ~2.6x into a blur. Each now renders at its own size, capped by the
+   column, and sits on a panel so a narrow one still reads as deliberate. */
+.work__figure img {
+  width: auto; max-width: 100%; height: auto;
+  display: block; margin: 0 auto;
+  border-radius: 10px;
+}
+.work__figure {
+  padding: 16px;
+  background: rgba(255,255,255,.035);
+  border: 1px solid var(--line-md);
+  border-radius: 14px;
+}
+.work__figure figcaption {
+  margin-top: 14px;
+  font-size: 14px; line-height: 1.55; color: var(--muted);
+  text-align: center;
+  max-width: 60ch; margin-left: auto; margin-right: auto;
+}
+
+/* Marks copy that is still waiting for the real wording. */
+.ph-text { opacity: .55; }
+
+@media (max-width: 620px) {
+  .work__page { padding: 22px 18px 80px; }
+  .work__proj { margin-top: 38px; padding-top: 32px; }
+}
+
+.about {
+  position: fixed; inset: 0; z-index: 300;
+  background: var(--bg);
+  overflow-y: auto;
+  /* Clears the fixed navigation, which now renders above this page. */
+  padding-top: var(--topbar-h);
+  animation: fade-in .3s both;
+}
+.about[hidden] { display: none; }
+
+/* Covers the top bar (z-index 300 beats 95), so this sets its own
+   top spacing rather than clearing a header. */
+.about__page {
+  width: 100%; max-width: 680px;
+  margin: 0 auto;
+  padding: 64px 28px 90px;
+}
+
+.about__back {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-bottom: 40px;
+  padding: 9px 18px 9px 15px;
+  border: 1px solid var(--line-md);
+  border-radius: 100px;
+  color: var(--soft); font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: color .2s, border-color .2s, transform .16s;
+  animation: screen-in .4s both;
+}
+.about__back:hover  { color: var(--primary); border-color: var(--primary); }
+.about__back:active { transform: scale(.97); }
+
+.about__intro { margin-bottom: 56px; animation: screen-in .45s .05s both; }
+.about__h1 {
+  font-family: var(--font-display);
+  font-size: clamp(2.4rem, 7vw, 3.4rem);
+  font-weight: 600; line-height: 1.12;
+  margin: 0 0 20px;
+}
+.about__h1:focus-visible { outline: none; }   /* programmatic focus only, no visible ring */
+.about__lead {
+  color: var(--soft);
+  font-size: clamp(1.05rem, 2.2vw, 1.2rem);
+  line-height: 1.7;
+  max-width: 46ch;
+  margin: 0;
+}
+
+.about__section {
+  padding: 44px 0;
+  border-top: 1px solid var(--line);
+  animation: screen-in .45s .1s both;
+}
+.about__section:first-of-type { padding-top: 0; border-top: 0; }
+
+.about__h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 3.6vw, 1.9rem);
+  font-weight: 600; line-height: 1.2;
+  margin: 0 0 26px;
+}
+.about__h3 {
+  font-size: 13px; font-weight: 600; letter-spacing: .8px;
+  text-transform: uppercase; color: var(--muted);
+  margin: 30px 0 16px;
+}
+
+.about__list { margin: 0; padding: 0; list-style: none; max-width: 58ch; }
+.about__list li {
+  position: relative;
+  color: var(--soft); font-size: 16px; line-height: 1.8;
+  padding-left: 24px; margin-bottom: 18px;
+}
+.about__list li::before {
+  content: ""; position: absolute; left: 3px; top: 11px;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+}
+
+.about__meta {
+  font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase;
+  color: var(--muted); margin: -14px 0 20px;
+}
+.about__p {
+  color: var(--soft); font-size: 16px; line-height: 1.8;
+  max-width: 58ch; margin: 0 0 16px;
+}
+.about__p b { color: var(--fg); font-weight: 600; }
+
+.about__links {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 16px 22px;
+}
+
+/* .stats and .lnk are sized for the compact outro overlay — scale them
+   up here, where they sit in reading-length copy. */
+.about .stats { margin-bottom: 0; }
+.about .stats li { padding: 18px 16px; }
+.about .stats b { font-size: 30px; }
+.about .stats span { font-size: 12.5px; }
+.about .lnk { font-size: 15px; }
+
+/* ═══ SMALL SCREENS ═════════════════════════════════════════════════ */
+@media (max-width: 560px) {
+  .screen { padding: 132px 18px 68px; }
+  .photo img { height: 168px; }
+  .game__sky { height: 168px; }
+  .game__holes { gap: 12px 6px; }
+  .hole { width: 46px; height: 46px; font-size: 24px; }
+  .slot__lab { font-size: 8.5px; }
+  .orb { width: 44px; height: 44px; margin: -22px 0 0 -22px; font-size: 28px; line-height: 44px; }
+  .about__page { padding: 44px 20px 70px; }
+  .about__intro { margin-bottom: 40px; }
+  .about__section { padding: 34px 0; }
+  .because { padding: 12px 14px 13px 16px; }
+}
+
+/* ═══ REDUCED MOTION ════════════════════════════════════════════════
+   Calm by default. Anything looping stops; state changes stay instant
+   but visible. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+  .ring, .bignum__halo { opacity: .5; }
+  .hint { opacity: .95; }
+}

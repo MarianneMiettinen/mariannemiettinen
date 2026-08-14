@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Case study: Intentional YouTube — Marianne Miettinen</title>
+<meta name="description" content="An interactive UX case study: how market research turned Intentional YouTube from a productivity nag into a shipped Chrome extension.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<!-- The ?v= is a cache-buster, not a real file name — the server ignores it.
+     Without it browsers keep serving the copy they downloaded last time, which
+     is why a deployed change could sit live and invisible for days. Bump the
+     number in ALL FOUR places below whenever styles.css or the scripts change,
+     and every visitor picks up the new files on their next load. -->
+<link rel="stylesheet" href="styles.css?v=2">
+</head>
+<body>
+
+<div class="progress" role="presentation"><div class="progress__fill" id="progressFill"></div></div>
+
+<!-- ── Top bar: title · tracker · about ────────────────────────────────── -->
+<header class="topbar">
+  <button class="brand" id="brandBtn" data-goto="home">
+    Marianne&nbsp;Miettinen <span>Portfolio</span>
+  </button>
+
+  <nav class="tracker" aria-label="Story progress">
+    <ol class="tracker__steps" id="trackerSteps"></ol>
+    <p class="tracker__count" id="trackerCount"></p>
+  </nav>
+
+  <!-- Below 720px the four links cannot fit beside the title, so they collapse
+       behind this. Hidden on wider screens, where the nav sits inline. -->
+  <button class="navtoggle" id="navToggle" type="button"
+          aria-label="Open menu" aria-expanded="false" aria-controls="topnav">
+    <span class="navtoggle__bars" aria-hidden="true"></span>
+  </button>
+
+  <nav class="topnav" id="topnav">
+    <!-- Order is deliberate: the flagship case study first, the supporting work
+         next to it, then who I am. Work before biography. -->
+    <button class="navlink navlink--study" data-goto="study">Intentional YouTube</button>
+    <button class="navlink" id="workBtn">Other projects</button>
+    <button class="navlink" id="aboutBtn">About Me</button>
+    <!-- Stays hidden until the store reports a working Firebase connection, so
+         the site shows no dead controls while setup is unfinished. -->
+    <div class="authwrap" id="authWrap" hidden>
+      <button class="navlink navlink--auth" id="authBtn" aria-expanded="false" aria-controls="authPanel">
+        <span id="authBtnTxt">Sign in</span>
+        <span class="authbtn__arrow" id="authArrow" aria-hidden="true"></span>
+      </button>
+      <div class="authpanel" id="authPanel" hidden>
+        <!-- Shown when signed out. -->
+        <form class="authpanel__form" id="authForm">
+          <label class="authpanel__label" for="authEmail">Email</label>
+          <input class="authpanel__input" type="email" id="authEmail" autocomplete="username" required>
+          <label class="authpanel__label" for="authPass">Password</label>
+          <input class="authpanel__input" type="password" id="authPass" autocomplete="current-password" required>
+          <button class="authpanel__go" type="submit">Sign in</button>
+          <p class="authpanel__err" id="authErr" hidden></p>
+        </form>
+        <!-- Shown when signed in, in place of the form. -->
+        <div class="authpanel__signedin" id="authSignedIn" hidden>
+          <p class="authpanel__who" id="authWho"></p>
+          <button class="authpanel__go authpanel__go--out" type="button" id="authOut">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </nav>
+</header>
+
+<p class="sr-only" role="status" aria-live="polite" id="liveRegion"></p>
+
+<!-- ══ LANDING PAGE ═══════════════════════════════════════════════════
+     Placeholder copy is marked with .ph-text and listed in the handover
+     notes — swap it for the wording in the Figma file. -->
+<main id="home" class="home">
+
+  <!-- ── Hero ──────────────────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="hero__copy">
+      <h1 class="hero__h1">Hello, I'm Marianne.</h1>
+      <p class="hero__lead">
+        I'm a UX Designer Trainee, and I build apps. This portfolio shows my
+        traineeship projects — and a new crazy challenge 👀
+      </p>
+      <div class="hero__actions">
+        <button class="cta" data-goto="study">See the case study &rarr;</button>
+      </div>
+    </div>
+
+    <!-- The "Go to challenge" button is painted into the artwork, so the real
+         control is a transparent hotspot laid over it. app.js positions and
+         sizes that hotspot from the image's actual painted rectangle, and
+         hides it entirely if the image is missing. -->
+    <div class="hero__media" id="heroMedia">
+      <img class="hero__img" id="heroImg" src="images/hero-web.jpg"
+           width="1800" height="1200" fetchpriority="high"
+           alt="Brush lettering reading '30 apps by Sep 30' over a burst of colour, with
+                Marianne smiling beside it and ink sketches of people working at laptops.">
+      <button class="hero__hotspot" id="heroHotspot" type="button" hidden
+              aria-label="Go to challenge — jump to the 30 squares"></button>
+    </div>
+  </section>
+
+  <!-- ── The 30-app challenge ──────────────────────────────────────── -->
+  <section class="challenge" aria-labelledby="challengeH">
+    <div class="challenge__bar">
+      <div class="challenge__head">
+        <p class="challenge__eyebrow">Challenge</p>
+        <h2 class="challenge__h" id="challengeH">30 apps by Sep&nbsp;30</h2>
+      </div>
+
+      <div class="challenge__meter">
+        <p class="challenge__count"><b id="shippedCount">1</b> shipped <span>of 30</span></p>
+        <div class="meter" role="img" aria-label="1 of 30 apps shipped">
+          <div class="meter__fill" id="meterFill"></div>
+        </div>
+      </div>
+    </div>
+
+    <ol class="grid30" id="grid30" aria-label="The 30 apps"></ol>
+  </section>
+
+</main>
+
+<main id="stage">
+
+<!-- ══ 0 · OVERVIEW ══════════════════════════════════════════════════ -->
+<section class="screen" data-screen="0" aria-label="Overview" data-title="Overview">
+  <div class="layout">
+    <div class="col col--text">
+      <p class="kicker">
+        <span class="kicker__tag kicker__tag--case">Case study</span>
+      </p>
+
+      <h1 class="heading heading--title">Intentional YouTube UX Design&nbsp;Process</h1>
+
+      <p class="body body--lead">
+        Because people struggle with social media, I decided to do a Chrome Extension.
+        I chose YouTube because I use it myself. I did market research because I wanted
+        it to be evidence-based.
+      </p>
+
+      <button class="cta" data-advance>Start the walkthrough &rarr;</button>
+    </div>
+
+    <div class="col col--visual">
+      <figure class="photo">
+        <img src="images/hook.png" alt="Illustration: four people at night, anxious, surrounded by phones and laptops playing YouTube. Thought bubbles read 'why am I doing this?' and 'just one more video'." width="880" height="345" decoding="async" fetchpriority="high">
+        <span class="photo__fade" aria-hidden="true"></span>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 1 · DECISION 1 ════════════════════════════════════════════════ -->
+<section class="screen" data-screen="1" aria-label="Decision 1 of 3" data-title="Decision 1" hidden>
+  <div class="layout">
+    <div class="col col--text">
+      <p class="kicker">
+        <span class="kicker__tag">Decision 1 of 3</span>
+      </p>
+
+      <h2 class="heading">I let people choose entertainment, instead of learning content&nbsp;only.</h2>
+
+      <p class="body">
+        Because I conducted interviews of 4 people, I learned that many like to use
+        YouTube for entertainment — and it is ok.
+      </p>
+    </div>
+
+    <div class="col col--visual">
+      <div class="laptop">
+        <div class="laptop__lid">
+          <div class="laptop__screen">
+            <div class="laptop__chrome" aria-hidden="true">
+              <i class="dot dot--r"></i><i class="dot dot--y"></i><i class="dot dot--g"></i>
+              <span class="urlbar">youtube.com</span>
+            </div>
+            <div class="laptop__viewport">
+              <div class="mock mock--center" data-mock>
+
+                <p class="m-title m-title--lg">Your goal for watching videos</p>
+                <p class="m-banner">This is private and only for your own mind.</p>
+                <p class="m-sub">What do you want from YouTube right now?</p>
+
+                <div class="m-example">
+                  <p><b>Example:</b></p>
+                  <p class="m-example__li">&bull; Mr. Bean goes swimming</p>
+                </div>
+
+                <button class="m-input m-hot" data-advance aria-label="Someone typed: Mr. Bean goes swimming. Continue.">
+                  <span class="m-input__txt">mr. bean goes swimming</span>
+                  <span class="m-mic" aria-hidden="true">&#127908;</span>
+                </button>
+
+                <div class="m-actions">
+                  <span class="m-btn m-btn--ghost">Back</span>
+                  <button class="m-btn m-btn--go m-btn--wide m-go" data-advance>
+                    Continue
+                    <span class="m-go__ring" aria-hidden="true"></span>
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="laptop__base" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 2 · DECISION 2 ════════════════════════════════════════════════ -->
+<section class="screen" data-screen="2" aria-label="Decision 2 of 3" data-title="Decision 2" hidden>
+  <div class="layout">
+    <div class="col col--text">
+      <p class="kicker">
+        <span class="kicker__tag">Decision 2 of 3</span>
+      </p>
+
+      <h2 class="heading">I cut the initial design of long journaling down to taps plus a few&nbsp;words.</h2>
+
+      <p class="body">
+        Because I conducted early user tests, where both participants said that
+        journaling was too much.
+      </p>
+    </div>
+
+    <div class="col col--visual">
+      <div class="laptop">
+        <div class="laptop__lid">
+          <div class="laptop__screen">
+            <div class="laptop__chrome" aria-hidden="true">
+              <i class="dot dot--r"></i><i class="dot dot--y"></i><i class="dot dot--g"></i>
+              <span class="urlbar">youtube.com</span>
+            </div>
+            <div class="laptop__viewport">
+              <div class="mock" data-mock>
+
+                <p class="m-title m-title--lg m-c">How are you feeling right now?</p>
+                <p class="m-sub m-sub--quiet">Naming your emotions helps you watch with understanding, and not avoid.</p>
+                <p class="m-tiny">This is private and only for your mind.</p>
+
+                <div class="m-field">mr. bean goes swimming</div>
+
+                <p class="m-tiny m-tiny--label">Select what resonates right now:</p>
+
+                <div class="m-chips">
+                  <span class="m-chip">&#128564; Tired</span>
+                  <span class="m-chip">&#128533; Hurt</span>
+                  <button class="m-chip m-chip--sel m-hot" data-advance aria-label="Select the emotion: insecure, and continue">
+                    &#128560; Insecure
+                  </button>
+                  <span class="m-chip">&#128561; Scared</span>
+                  <span class="m-chip">&#128543; Anxious</span>
+                  <span class="m-chip">&#128545; Angry</span>
+                  <span class="m-chip">&#128533; Lonely</span>
+                  <span class="m-chip">&#128548; Annoyed</span>
+                  <span class="m-chip">&#128546; Sad</span>
+                  <span class="m-chip">&#128529; Bored</span>
+                  <span class="m-chip">&#129300; Procrastinating</span>
+                  <span class="m-chip">&#128557; Desperate</span>
+                  <span class="m-chip">&#128584; Avoiding feelings</span>
+                </div>
+
+                <div class="m-field m-field--empty">&#128528; Something else&hellip;</div>
+
+                <div class="m-actions">
+                  <span class="m-btn m-btn--ghost">Back</span>
+                  <button class="m-btn m-btn--go m-btn--wide m-go" data-advance>
+                    Continue
+                    <span class="m-go__ring" aria-hidden="true"></span>
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="laptop__base" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 3 · THE PRODUCT ═══════════════════════════════════════════════ -->
+<section class="screen" data-screen="3" aria-label="The product" data-title="The product" hidden>
+  <div class="layout">
+    <div class="col col--text">
+      <h2 class="heading">Intentional YouTube does three small&nbsp;things.</h2>
+
+      <p class="body">
+        You set an intention, you check in with how you're feeling, and you decide how
+        long. Then you watch — without the guilt afterwards.
+      </p>
+
+      <p class="body">
+        This is because the interviews and the poll results showed that people need
+        1) support with sticking to their intention, and 2) help with procrastination,
+        which is an emotional problem at its core — feelings of fear and anxiety about
+        work tasks, for example, which are then delayed. Intentional YouTube helps them
+        identify these and understand themselves.
+      </p>
+    </div>
+
+    <div class="col col--visual">
+      <div class="laptop">
+        <div class="laptop__lid">
+          <div class="laptop__screen">
+            <div class="laptop__chrome" aria-hidden="true">
+              <i class="dot dot--r"></i><i class="dot dot--y"></i><i class="dot dot--g"></i>
+              <span class="urlbar">youtube.com</span>
+            </div>
+            <div class="laptop__viewport">
+              <div class="mock" data-mock>
+
+                <p class="m-title">Choose how many minutes you want to spend</p>
+
+                <div class="m-pillrow">
+                  <span class="m-pill">5 min</span>
+                  <span class="m-pill">7 min</span>
+                  <span class="m-pill">10 min</span>
+                  <span class="m-pill">12 min</span>
+                  <span class="m-pill">15 min</span>
+                  <span class="m-pill">20 min</span>
+                  <button class="m-pill m-pill--sel m-hot" data-advance aria-label="Choose 25 minutes and continue">
+                    25 min
+                  </button>
+                </div>
+                <div class="m-pillrow">
+                  <span class="m-pill">30 min</span>
+                  <span class="m-pill m-pill--warn">1 hour</span>
+                  <span class="m-pill m-pill--warn">1.5 hours</span>
+                  <span class="m-pill m-pill--warn">2 hours</span>
+                </div>
+
+                <div class="m-cards">
+                  <div class="m-card">
+                    <p class="m-card__h">Time from your day</p>
+                    <div class="m-pie-wrap">
+                      <div class="m-pie" role="img" aria-label="Pie chart: work 8.1 hours, family 2.5 hours, sports 1.5 hours, videos 0.4 hours"></div>
+                      <ul class="m-legend">
+                        <li><i style="background:#4a90d9"></i>Work <b>8.1h</b></li>
+                        <li><i style="background:#9b7fd4"></i>Family <b>2.5h</b></li>
+                        <li><i style="background:#6fbf73"></i>Sports <b>1.5h</b></li>
+                        <li><i style="background:#e8c33a"></i>Videos <b>0.4h</b></li>
+                      </ul>
+                    </div>
+                  </div>
+                  <div class="m-card">
+                    <p class="m-card__h">Today's timeline</p>
+                    <div class="m-timeline" role="img" aria-label="Timeline showing a 25 minute video session slotted between 10 and 11 PM">
+                      <div class="m-tl__hours"><span>9PM</span><span>10PM</span><span>11PM</span><span>12AM</span></div>
+                      <div class="m-tl__track">
+                        <div class="m-tl__block" style="background:#9b7fd4;flex:5"></div>
+                        <div class="m-tl__block m-tl__block--now" style="background:#e8c33a;flex:1.4">Your video session</div>
+                        <div class="m-tl__block" style="background:#4a90d9;flex:5"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <p class="m-banner">You're setting aside <b>25min</b> for this session</p>
+
+                <div class="m-actions">
+                  <span class="m-btn m-btn--ghost">Back</span>
+                  <button class="m-btn m-btn--go m-go" data-advance>
+                    Continue
+                    <span class="m-go__ring" aria-hidden="true"></span>
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="laptop__base" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 4 · DECISION 3 ════════════════════════════════════════════════ -->
+<section class="screen" data-screen="4" aria-label="Decision 3 of 3" data-title="Decision 3" hidden>
+  <div class="layout">
+    <div class="col col--text">
+      <p class="kicker">
+        <span class="kicker__tag">Decision 3 of 3</span>
+      </p>
+
+      <h2 class="heading">I decided to leave the copy-script feature to&nbsp;v2.0.</h2>
+
+      <p class="body">
+        Because I tried building it, and it turned out to be more time-consuming than
+        expected. I realised I want to stick to my own deadline — so I published without
+        this non-essential feature.
+      </p>
+    </div>
+
+    <div class="col col--visual">
+      <div class="laptop">
+        <div class="laptop__lid">
+          <div class="laptop__screen">
+            <div class="laptop__chrome" aria-hidden="true">
+              <i class="dot dot--r"></i><i class="dot dot--y"></i><i class="dot dot--g"></i>
+              <span class="urlbar">chromewebstore.google.com</span>
+            </div>
+            <div class="laptop__viewport">
+              <div class="mock" data-mock>
+
+                <div class="m-ship__head">
+                  <p class="m-tiny m-tiny--label">v1.0 &middot; live on the Chrome Web Store</p>
+                  <p class="m-title m-title--lg">Intentional YouTube</p>
+                </div>
+
+                <div class="m-ship">
+                  <div class="m-ship__row"><span>Intention setting</span><span class="m-tag m-tag--done">&check; shipped</span></div>
+                  <div class="m-ship__row"><span>Mood check-in</span><span class="m-tag m-tag--done">&check; shipped</span></div>
+                  <div class="m-ship__row"><span>Session timer</span><span class="m-tag m-tag--done">&check; shipped</span></div>
+                  <div class="m-ship__row"><span>Time-from-your-day view</span><span class="m-tag m-tag--done">&check; shipped</span></div>
+                  <button class="m-ship__row m-ship__row--cut m-hot" data-advance aria-label="Copy script, moved to version 2.0 — continue">
+                    <span>Copy script</span>
+                    <span class="m-tag m-tag--next">v2.0</span>
+                  </button>
+                </div>
+
+                <p class="m-banner">Published in July. 4 real users, and counting.</p>
+
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="laptop__base" aria-hidden="true"></div>
+      </div>
+
+      <!-- This mockup is a status list with no Continue inside it, so the way
+           forward goes below the image instead. Every other step uses the green
+           Continue within the laptop. -->
+      <button class="cta cta--below" data-advance>Continue &rarr;</button>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 5 · THE RESEARCH ══════════════════════════════════════════════ -->
+<section class="screen" data-screen="5" aria-label="The process" data-title="The research" hidden>
+  <div class="layout layout--wide">
+    <div class="col col--text">
+      <p class="kicker">
+        <span class="kicker__tag">The process</span>
+      </p>
+
+      <h2 class="heading">Built through the Double&nbsp;Diamond.</h2>
+
+      <!-- Belongs to Discover specifically — it is the research that opened the
+           project — so app.js shows it only while that stage is selected. -->
+      <p class="body" id="discoverNote" hidden>
+        <i>80%</i> of people say they waste too much time on social media. That number is
+        the reason everyone builds a blocker. I didn't trust it, so I ran
+        <i>4 market research interviews and 2 polls (50+ responses)</i> before designing
+        anything. Every decision after this one exists because of what came back.
+      </p>
+
+      <p class="body" id="diamondText">Click <b>Discover</b> to walk through each stage.</p>
+    </div>
+
+    <div class="col col--visual">
+      <svg class="dd" viewBox="0 0 600 250" id="diamond" aria-label="Double Diamond process diagram — four stages you click in order">
+        <text x="150" y="13" text-anchor="middle" class="dd__space">PROBLEM SPACE</text>
+        <text x="450" y="13" text-anchor="middle" class="dd__space">SOLUTION SPACE</text>
+        <line x1="300" y1="22" x2="300" y2="210" class="dd__divider"/>
+        <line x1="0" y1="100" x2="600" y2="100" class="dd__mid"/>
+      </svg>
+
+      <figure class="photo photo--inset" id="interviewShot" hidden>
+        <img src="images/interview.png" alt="Illustration of a user interview: a researcher listening while a participant says 'it's my way to relax, but I often end up feeling bad after'. Sticky notes list insights: too much time, guilt afterwards, want control, hard to stop." width="845" height="245" loading="lazy" decoding="async">
+        <figcaption>User interview — Discover</figcaption>
+      </figure>
+
+      <button class="cta" id="diamondCta" data-advance hidden>See what I decided &rarr;</button>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 6 · THE RESULT ════════════════════════════════════════════════ -->
+<section class="screen" data-screen="6" aria-label="The result" data-title="The result" hidden>
+  <div class="layout layout--wide">
+    <div class="col col--text">
+      <h2 class="heading">I gave them the&nbsp;words.</h2>
+
+      <p class="body">
+        I have studied psychology, so I knew that naming the feeling helps.
+      </p>
+
+      <p class="body" id="gameText">
+        Good feelings and hard ones. Click each one to catch it — that single tap is
+        the entire check-in.
+      </p>
+    </div>
+
+    <div class="col col--visual">
+      <p class="gamebanner">Emoji-game &mdash; you made it to the end of the walkthrough!!</p>
+      <div class="game" id="game">
+        <div class="game__sky" id="sky"></div>
+        <p class="game__label">click to catch</p>
+        <div class="game__holes" id="holes"></div>
+        <div class="game__win" id="gameWin" hidden>
+          <span class="game__check">&#9989;</span>
+          <p>All named.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<button class="back" id="backBtn" hidden>&larr; back</button>
+
+<!-- ── Ending ──────────────────────────────────────────────────────────── -->
+<div class="outro" id="outro" hidden>
+  <div class="outro__inner">
+    <p class="chapter">The end &mdash; and the ask</p>
+    <h2 class="outro__h">Every screen had a reason.</h2>
+    <p class="outro__p">
+      Four insights, four decisions, one shipped extension. That's how I work: find out
+      what's actually true first, then cut everything that isn't earning its place.
+    </p>
+
+    <ul class="stats">
+      <li><b>4</b><span>market research interviews</span></li>
+      <li><b>2</b><span>polls, 50+ responses</span></li>
+      <li><b>12</b><span>user tests with 4 people</span></li>
+      <li><b>v1.0</b><span>live since July</span></li>
+    </ul>
+
+    <div class="outro__links">
+      <a class="cta" href="https://chromewebstore.google.com/detail/intentional-youtube/bpbbpkjadppijccljepebklbghihohcc" target="_blank" rel="noopener">Try it on the Chrome Web Store &rarr;</a>
+      <a class="lnk" href="mailto:marianne@mariannemiettinen.com">marianne@mariannemiettinen.com</a>
+      <a class="lnk" href="https://linkedin.com/in/mariannemiettinen" target="_blank" rel="noopener">LinkedIn</a>
+    </div>
+
+    <button class="restart" id="restart">Start over</button>
+  </div>
+</div>
+
+<!-- ── Other projects — same full-page pattern as About Me ─────────────────
+     Three roles, each its own section. The structure is deliberately identical
+     across all three (eyebrow → title → meta → summary → detail → image) so the
+     page can be scanned by moving down one column, rather than read in full.
+
+     CONTENT IS PLACEHOLDER: every element marked .ph-text is waiting for the
+     real wording from the "Other projects content" doc. -->
+<div class="work" id="work" aria-label="Other projects" hidden>
+  <div class="work__page">
+
+    <button class="about__back" id="workClose">&larr; Back to the story</button>
+
+    <header class="work__intro">
+      <p class="chapter">Other projects</p>
+      <h1 class="work__h1" id="workH" tabindex="-1">Research, testing and&nbsp;teaching</h1>
+      <p class="work__lead">
+        Three roles alongside the products I build &mdash; user research in the public
+        sector, scientific research, and usability testing for a client.
+      </p>
+    </header>
+
+    <!-- ══ 1 ══════════════════════════════════════════════════════════ -->
+    <section class="work__proj" aria-labelledby="workP1">
+      <p class="work__eyebrow"><span class="work__idx" aria-hidden="true"></span> Scientific Researcher</p>
+      <h2 class="work__h2" id="workP1">Apprenticeship</h2>
+      <p class="work__meta">2025 &middot; Scientific research &middot; Apprenticeship</p>
+
+      <p class="work__lead-in">
+        My supervisors asked me to turn my master's thesis into a real research article.
+      </p>
+
+      <h3 class="work__h3">Approach</h3>
+      <div class="work__body">
+        <p>We used the same data from the MathMot international initiative that I had
+          worked on as a research assistant, along with the findings from my master's
+          thesis. I made the data visualisations myself by filtering the dataset in
+          different ways, and discovered new insights through the visualisations.</p>
+      </div>
+
+      <p class="work__status">The paper is currently in peer review, as of 2026.</p>
+
+      <h3 class="work__h3">The visualisations</h3>
+      <div class="work__figures">
+        <figure class="work__figure">
+          <img src="images/work/scientific1.png" width="273" height="276"
+               decoding="async"
+               alt="A k-means clustering scatter plot at iteration 17, with the data
+                    separated into three coloured clusters, shown beside the Python code
+                    that generated it.">
+          <figcaption>1 &mdash; clustering the dataset, shown here at iteration 17.</figcaption>
+        </figure>
+        <figure class="work__figure">
+          <img src="images/work/scientific2.png" width="825" height="403"
+               decoding="async"
+               alt="Bar chart titled Achievement Emotion Profiles, comparing enjoyment,
+                    anxiety and boredom across three profiles: moderate, positive and
+                    negative.">
+          <figcaption>2 &mdash; the three achievement-emotion profiles the clusters
+            revealed.</figcaption>
+        </figure>
+        <figure class="work__figure">
+          <img src="images/work/scientific3.png" width="1023" height="457"
+               decoding="async"
+               alt="Three heatmaps side by side, one per profile, each showing every
+                    student as a row shaded by the intensity of their enjoyment, anxiety
+                    and boredom.">
+          <figcaption>3 &mdash; every student in the dataset, grouped by profile and
+            shaded by emotion intensity.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ══ 2 ══════════════════════════════════════════════════════════ -->
+    <section class="work__proj" aria-labelledby="workP2">
+      <p class="work__eyebrow"><span class="work__idx" aria-hidden="true"></span> UX Tester</p>
+      <h2 class="work__h2" id="workP2">Castifai &mdash; a freelancing client</h2>
+      <p class="work__meta">2026 &middot; Usability testing &middot; Freelance</p>
+
+      <p class="work__lead-in">
+        I did UX testing during the startup's early phase.
+      </p>
+
+      <h3 class="work__h3">What I did</h3>
+      <ol class="work__steps">
+        <li>
+          <h4 class="work__step-h">Screen recordings</h4>
+          <p>Recordings of where I, as a user, got stuck.</p>
+        </li>
+        <li>
+          <h4 class="work__step-h">Bug reporting and payment testing</h4>
+        </li>
+        <li>
+          <h4 class="work__step-h">Identifying the most valuable features</h4>
+        </li>
+        <li>
+          <h4 class="work__step-h">Step-by-step reports</h4>
+          <p>With screenshots of the problems in user onboarding and conversion.</p>
+        </li>
+        <li>
+          <h4 class="work__step-h">Designs, as a bonus for my client</h4>
+        </li>
+      </ol>
+
+      <figure class="work__figure">
+        <img src="images/work/ux-tester.png" width="741" height="403"
+             decoding="async"
+             alt="Castifai's landing page shown before and after. The before version
+                  reads 'Turn what you watch into what you're known for'; the after
+                  version reads 'Turn any video into LinkedIn content in 30 seconds'.">
+        <figcaption>Castifai's landing page before my feedback in February 2026, and
+          again in April. Castifai may have updated their design further since my
+          consultation.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ══ 3 ══════════════════════════════════════════════════════════ -->
+    <section class="work__proj" aria-labelledby="workP3">
+      <p class="work__eyebrow"><span class="work__idx" aria-hidden="true"></span> User Researcher</p>
+      <h2 class="work__h2" id="workP3">Special Needs in my City</h2>
+      <p class="work__meta">2025 &middot; User research &middot; Public sector</p>
+
+      <p class="work__lead-in">
+        Six steps, from raw Facebook posts to a UX design suggestion.
+      </p>
+
+      <h3 class="work__h3">What I did</h3>
+      <ol class="work__steps">
+        <li>
+          <h4 class="work__step-h">Qualitative Facebook analysis</h4>
+          <p>I collected 108 posts from a Facebook group and identified user pain
+             points and themes.</p>
+        </li>
+        <li>
+          <h4 class="work__step-h">Quantitative Facebook analysis</h4>
+          <p>Using Facebook's built-in tools, I identified the posts with most
+             engagement, and the group's trends.</p>
+        </li>
+        <li>
+          <h4 class="work__step-h">Creating avatars</h4>
+          <p>Based on the Facebook data, I created three avatars describing the
+             parents of special needs children.</p>
+        </li>
+        <li>
+          <h4 class="work__step-h">Creating user journey maps</h4>
+          <p>Based on the Facebook data, I created a user journey map for each of the
+             three avatars.</p>
+        </li>
+        <li>
+          <h4 class="work__step-h">Competitor audit</h4>
+        </li>
+        <li>
+          <h4 class="work__step-h">UX design suggestion</h4>
+        </li>
+      </ol>
+
+      <figure class="work__figure">
+        <img src="images/work/user-researcher.png" width="474" height="346"
+             decoding="async"
+             alt="A spreadsheet of coded Facebook posts. Each row holds a quoted post
+                  alongside two analysis columns: the pain point it expresses, and any
+                  tools or solutions the writer mentions.">
+        <figcaption>Step 1 &mdash; each post coded for its pain point and any tools or
+          solutions mentioned.</figcaption>
+      </figure>
+    </section>
+
+  </div>
+</div>
+
+<!-- ── About Me — a real page, not a popup ────────────────────────────────── -->
+<div class="about" id="about" aria-label="About Marianne Miettinen" hidden>
+  <div class="about__page">
+
+    <button class="about__back" id="aboutClose">&larr; Back to the story</button>
+
+    <header class="about__intro">
+      <!-- Not lazy: it is 42KB and sits at the very top of the page, so
+           deferring it saves nothing and only risks it never loading. -->
+      <img class="about__portrait" src="images/profile.jpg"
+           alt="Marianne Miettinen" width="108" height="108" decoding="async">
+      <p class="chapter">About me</p>
+      <h1 class="about__h1" id="aboutH" tabindex="-1">Marianne Miettinen</h1>
+      <p class="about__lead">
+        UX designer&ndash;researcher and Claude Code builder. I build tools that help people
+        spend time intentionally and regulate anxiety.
+      </p>
+    </header>
+
+    <section class="about__section" aria-labelledby="aboutBgH">
+      <h2 class="about__h2" id="aboutBgH">Background</h2>
+      <ul class="about__list">
+        <li>I'm a UX designer&ndash;researcher based in Finland.</li>
+        <li>My master's thesis became a scientific article, now in peer review &mdash; written
+            with two supervisors, it's a cluster analysis of elementary school students'
+            emotions in mathematics.</li>
+        <li>Since then I've moved toward building products of my own, carrying the same
+            interest in emotion and learning from research into something people can
+            actually use.</li>
+        <li>My background is unusually mixed &mdash; teaching, user research, private
+            tutoring, research assistance, user testing for startups &mdash; which means
+            I learn fast and I'm comfortable not being the expert in the room.</li>
+        <li>I'm looking for a creative role at a small or growing company.</li>
+        <li>Outside work: piano improvisation, drawing, posting on YouTube, and reading.</li>
+      </ul>
+    </section>
+
+    <section class="about__section" aria-labelledby="aboutProjectH">
+      <h2 class="about__h2" id="aboutProjectH">Intentional YouTube</h2>
+      <p class="about__meta">Chrome extension &middot; research &rarr; design &rarr; shipped product &middot; solo</p>
+
+      <p class="about__p">
+        Built for people who don't want to waste time on YouTube but can't completely get rid
+        of it either. Set an intention, check in with how you're feeling, set a timer.
+      </p>
+
+      <h3 class="about__h3">The numbers</h3>
+      <ul class="stats">
+        <li><b>4</b><span>market research interviews</span></li>
+        <li><b>2</b><span>polls, 50+ responses</span></li>
+        <li><b>12</b><span>user tests with 4 people</span></li>
+        <li><b>v1.0</b><span>published in July</span></li>
+      </ul>
+    </section>
+
+    <section class="about__section" aria-labelledby="aboutContactH">
+      <h2 class="about__h2" id="aboutContactH">Get in touch</h2>
+      <div class="about__links">
+        <a class="cta" href="https://chromewebstore.google.com/detail/intentional-youtube/bpbbpkjadppijccljepebklbghihohcc" target="_blank" rel="noopener">Chrome Web Store &rarr;</a>
+        <a class="lnk" href="mailto:marianne@mariannemiettinen.com">marianne@mariannemiettinen.com</a>
+        <a class="lnk" href="https://linkedin.com/in/mariannemiettinen" target="_blank" rel="noopener">LinkedIn</a>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<!-- Firebase, in the "compat" flavour: it attaches a plain `firebase` global
+     rather than needing import syntax and a bundler, which keeps this site a
+     set of files that can be uploaded anywhere with no build step. -->
+<!-- No Storage SDK: Google now requires the paid Blaze plan for Cloud Storage
+     buckets, so images stay on Hostinger as plain files instead — see
+     FIREBASE-SETUP.md. Firestore holds only text and status, which is what
+     keeps this entirely on the free Spark plan. -->
+<script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore-compat.js"></script>
+
+<!-- Load order matters: apps.js holds the starting data, firebase-config.js the
+     connection details, store.js decides where data actually comes from, and
+     app.js draws it. -->
+<script src="apps.js?v=2"></script>
+<script src="firebase-config.js?v=2"></script>
+<script src="store.js?v=2"></script>
+<script src="app.js?v=2"></script>
+</body>
+</html>
