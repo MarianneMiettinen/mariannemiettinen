@@ -1748,7 +1748,13 @@
     }
 
     bar.hidden = !s.canEdit;
-    expBtn.hidden = s.connected;      // pointless once saves are live
+    /* Shown to the owner again, not hidden once Firestore is live. Export is
+       no longer about publishing the grid — the server does that — it is how
+       the offline fallback in apps.js gets refreshed. With no way to re-export,
+       that fallback silently rots into last month's grid. Still hidden from
+       visitors, who have nothing to export.
+    */
+    expBtn.hidden = !s.canEdit;
     tag.textContent = !s.connected
       ? 'Offline — changes stay in this browser'
       : (s.saving ? 'Saving…' : 'Live — saved for everyone');
