@@ -1788,7 +1788,31 @@
                   a.shot || '', a.process || '',
                   a._shotPreview ? 1 : 0, a._processPreview ? 1 : 0].join(''));
     }
-    return parts.join('');
+    /* The synced screenshots belong in this signature too. They arrive on
+       their OWN Firestore subscription, separate from the tracker document
+       and normally a moment later, because the image documents are far
+       bigger. Built from appData alone, the signature looked identical when
+       that second delivery landed, so the redraw was skipped and the squares
+       kept the flat colour they were first drawn with. Visitors saw a stale
+       grid until some unrelated event forced a full render — opening a card
+       was the usual one, which is exactly the reported "tap one square and
+       the rest appear". The owner never saw it, because shotsCacheRead()
+       fills the pictures in from localStorage before the very first render. */
+    return parts.join('') + '' + shotsSignature();
+  }
+
+  /* Length rather than content: comparing thirty data URLs character by
+     character on every store event is real work for no gain, and a replaced
+     screenshot practically never encodes to exactly the same size. */
+  function shotsSignature() {
+    var shots = Store.shots || {};
+    var parts = [];
+    for (var n in shots) {
+      if (!shots.hasOwnProperty(n)) continue;
+      var s = shots[n] || {};
+      parts.push(n + '' + (s.shot || '').length + '' + (s.process || '').length);
+    }
+    return parts.sort().join('');
   }
 
   Store.onChange(function () {
